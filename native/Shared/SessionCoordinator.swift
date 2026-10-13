@@ -370,7 +370,7 @@ final class SessionCoordinator: ObservableObject {
                     awaitingReceiverRestart = false
                     send(.restart)
                 }
-                status = role == .sender ? "Approved. Tap Share screen." : "Waiting for screen sharing"
+                status = isSharing ? "Sharing screen" : (role == .sender ? "Approved. Tap Share screen." : "Waiting for screen sharing")
             case "signal":
                 guard approved, var authenticator, let payload = message.payload, let mac = message.mac else {
                     throw PairingError.authenticationFailed

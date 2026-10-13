@@ -11,6 +11,8 @@ The source implements the iPhone sender, native Mac receiver, direct LAN validat
 
 If provisioning rejects `com.apple.developer.screen-recording`, record the actual signing error. The unsigned CI build does not verify entitlement provisioning.
 
+Apple does not ship ScreenCaptureKit in the iOS 27 Simulator SDK. The simulator app explicitly reports that screen sharing requires a physical iPhone; its UI, WebRTC, and audio-adapter tests still compile and run. The device build separately compiles the real capture implementation.
+
 ## Prove capture and direct LAN HDMI
 
 Keep the devices on the same reachable Wi-Fi for this first gate. No Worker, TURN account, Device Hub, or meeting app is needed.

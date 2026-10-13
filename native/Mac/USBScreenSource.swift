@@ -240,7 +240,6 @@ private final class USBScreenPipeline: NSObject, AVCaptureVideoDataOutputSampleB
                 audio = output
             }
             session.beginConfiguration()
-            if session.canSetSessionPreset(.inputPriority) { session.sessionPreset = .inputPriority }
             guard session.canAddInput(input) else {
                 session.commitConfiguration()
                 throw USBScreenError.unavailable("The USB iPhone input is busy or unavailable. Close QuickTime or other capture apps and try again.")
