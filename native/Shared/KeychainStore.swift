@@ -4,7 +4,7 @@ import Security
 
 enum KeychainStore {
     static func save(_ data: Data, account: String) throws {
-        let query = query(account: account)
+        let query = Self.query(account: account)
         let update: [String: Any] = [kSecValueData as String: data]
         let result = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if result == errSecItemNotFound {
@@ -19,7 +19,7 @@ enum KeychainStore {
     }
 
     static func load(account: String) throws -> Data? {
-        var query = query(account: account)
+        var query = Self.query(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -30,7 +30,7 @@ enum KeychainStore {
     }
 
     static func delete(account: String) {
-        let query = query(account: account)
+        let query = Self.query(account: account)
         SecItemDelete(query as CFDictionary)
     }
 

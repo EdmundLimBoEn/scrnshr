@@ -1,9 +1,12 @@
 // Written by gpt-6.1-sol in T3 Code through the Codex harness on behalf of Edmund.
 import Combine
 import CoreMedia
+#if canImport(ScreenCaptureKit)
 @preconcurrency import ScreenCaptureKit
+#endif
 import UIKit
 
+#if canImport(ScreenCaptureKit)
 @MainActor
 final class ScreenCaptureController: NSObject, ObservableObject {
     @Published private(set) var isCapturing = false
@@ -283,3 +286,32 @@ private final class CaptureSampleOutput: NSObject, SCStreamOutput, @unchecked Se
         if let frame { onVideo(frame) }
     }
 }
+#else
+@MainActor
+final class ScreenCaptureController: NSObject, ObservableObject {
+    @Published private(set) var isCapturing = false
+    @Published private(set) var isStarting = false
+
+    var onVideo: ((CMSampleBuffer) -> Void)?
+    var onStatus: ((CaptureStatus) -> Void)?
+    var onError: ((String) -> Void)?
+
+    private let audioDevice: AppAudioDevice
+
+    init(audioDevice: AppAudioDevice) {
+        self.audioDevice = audioDevice
+        super.init()
+    }
+
+    func start() {
+        audioDevice.reset()
+        onStatus?(.stopped)
+        onError?("Screen sharing requires a physical iPhone. You can test pairing in the simulator.")
+    }
+
+    func stop() async {
+        audioDevice.reset()
+        onStatus?(.stopped)
+    }
+}
+#endif

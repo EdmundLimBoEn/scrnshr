@@ -5,8 +5,10 @@ import CoreImage
 import CoreMedia
 import CoreVideo
 import Foundation
+#if canImport(ScreenCaptureKit)
 import ScreenCaptureKit
-import WebRTC
+#endif
+@preconcurrency import WebRTC
 
 @MainActor
 public final class WebRTCSession: NSObject, ObservableObject {
@@ -810,7 +812,7 @@ private final class ScreenVideoInput: @unchecked Sendable {
     }
 
     private static func orientation(_ sample: CMSampleBuffer) -> ScreenFrameOrientation {
-        #if os(iOS)
+        #if os(iOS) && canImport(ScreenCaptureKit)
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let number = attachments.first?[.videoOrientation] as? NSNumber else {
             return ScreenFrameOrientation(exifValue: 1)

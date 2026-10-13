@@ -60,9 +60,13 @@ jobs:
           retention-days: 14
 
   native:
-    name: iPhone and Mac compile and XCTest
+    name: Native ${{ matrix.platform }} compile and XCTest
     runs-on: xcode-27
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [phone, mac]
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
@@ -71,20 +75,22 @@ jobs:
         with:
           path: .build/SourcePackages
           key: native-spm-${{ runner.os }}-${{ runner.arch }}-xcode27.1-${{ hashFiles('Scrnshr.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-      - name: Build device, simulator, Mac, and run tests
-        run: bash scripts/check-native.sh
+      - name: Build selected platform and run tests
+        run: bash scripts/check-native.sh --${{ matrix.platform }}
       - name: Upload XCTest results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-test-results
+          name: native-${{ matrix.platform }}-test-results
           path: .build/native-test-results.*/*.xcresult
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
       - name: Package unsigned Mac receiver
+        if: matrix.platform == 'mac'
         run: ditto -c -k --sequesterRsrc --keepParent .build/DerivedData/Build/Products/Release/ScrnshrMac.app .build/scrnshr-mac-unsigned.zip
       - name: Upload unsigned Mac receiver
+        if: matrix.platform == 'mac'
         uses: actions/upload-artifact@v4
         with:
           name: scrnshr-mac-unsigned
