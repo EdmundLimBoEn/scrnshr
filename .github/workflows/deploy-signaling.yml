@@ -1,0 +1,89 @@
+name: Deploy signaling
+
+on:
+  workflow_dispatch:
+    inputs:
+      hardware_validation:
+        description: 'Confirm signed iPhone capture, app-audio, and direct LAN HDMI checks in docs/testing.md passed.'
+        type: choice
+        required: true
+        default: 'not yet'
+        options:
+          - 'not yet'
+          - 'passed'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-signaling-production
+  cancel-in-progress: false
+
+jobs:
+  hardware-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require device validation
+        env:
+          HARDWARE_VALIDATION: ${{ inputs.hardware_validation }}
+        run: |
+          if [[ "$HARDWARE_VALIDATION" != passed ]]; then
+            echo 'Run the device validation checklist before deploying signaling.' >&2
+            exit 1
+          fi
+
+  checks:
+    needs: hardware-gate
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    defaults:
+      run:
+        working-directory: signaling
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+      - name: Install pinned deployment toolchain
+        run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: scrnshr-worker
+          path: signaling/.cloudflare/output/v0
+      - name: Deploy tested Worker with runtime secrets
+        env:
+          CI: 'true'
+          CF_SEND_TELEMETRY: 'false'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OWNER_TOKEN: ${{ secrets.OWNER_TOKEN }}
+          TURN_KEY_ID: ${{ secrets.TURN_KEY_ID }}
+          TURN_API_TOKEN: ${{ secrets.TURN_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secrets_file="$RUNNER_TEMP/scrnshr-worker-secrets.json"
+          trap 'rm -f "$secrets_file"' EXIT
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          required = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "OWNER_TOKEN", "TURN_KEY_ID", "TURN_API_TOKEN"]
+          missing = [key for key in required if not os.environ.get(key)]
+          if missing:
+              raise SystemExit("Missing GitHub deployment secrets: " + ", ".join(missing))
+          payload = {key: os.environ[key] for key in ("OWNER_TOKEN", "TURN_KEY_ID", "TURN_API_TOKEN")}
+          path = Path(os.environ["RUNNER_TEMP"]) / "scrnshr-worker-secrets.json"
+          path.write_text(json.dumps(payload))
+          path.chmod(0o600)
+          PY
+          node node_modules/cf/bin/cf deploy --prebuilt --mode production --secrets-file "$secrets_file"

@@ -1,0 +1,27 @@
+{
+  "name": "@scrnshr/signaling",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "cf build",
+    "check:deploy": "cf deploy --dry-run --prebuilt --mode production",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json && tsc --noEmit -p tsconfig.tests.json",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "check": "bun run typecheck && bun run test && bun run build",
+    "dev": "cf dev",
+    "deploy": "cf deploy --prebuilt --mode production"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261013.1",
+    "@cloudflare/vite-plugin": "2.0.0-beta.sha-8c6014f9a",
+    "@types/node": "22.19.15",
+    "esbuild": "0.25.12",
+    "cf": "1.0.0-beta.16",
+    "miniflare": "4.20260730.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

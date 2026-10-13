@@ -1,0 +1,934 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+
+	};
+	objectVersion = 56;
+	objects = {
+		8D86CD90466A2D5BBB864EE7 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.cpp.objcpp";
+			path = "native/Audio/AppAudioDevice.mm";
+			sourceTree = "SOURCE_ROOT";
+		};
+		7E7C32E9B3DB930DB74CAA26 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Mac/PresentationController.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		145D58E0500F7CF0E48FD2BB = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Mac/PresentationView.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		5F42B8C7734682D25E22CE43 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Mac/ScrnshrMacApp.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		7FC14F208EDD9ABBCF06410B = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Mac/USBScreenSource.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		E1A311EAABBAE93FB14F9D83 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/KeychainStore.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		E89963312E55C1144DA08795 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/ManualSignalingView.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		DD82764E0CB23058862680E6 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/MediaModels.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		96FFD0AA700D2020D54C8ACE = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/Pairing.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		C15B63572DE24527F851E019 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/SessionCoordinator.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		961564E3BD111274D57DDB94 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/SignalingClient.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		1C6AC03B9F9CA4D9A0C212D9 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Shared/WebRTCSession.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		88004D8A248F1AF554CADEC4 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/PairingTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		A262CB27BF58DAFD8530D7A9 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/PresentationTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		1C2105057E6BC5202B0AFF53 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/WebRTCModelsTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		34D66B069AD212B31514F596 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/iOS/AppAudioDeviceTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		C2D866573036078BFBACC0FF = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/iOS/QRCodeScanner.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		B9324BE3FC4F3D39EB754763 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/iOS/ScreenCaptureController.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		24683DE3308DD7E01C8D8F68 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/iOS/ScrnshrPhoneApp.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		A3AD28CDDC6395E7BF6D8709 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.c.h";
+			path = "native/Audio/AppAudioDevice.h";
+			sourceTree = "SOURCE_ROOT";
+		};
+		D9AFD70B21D14B090B4D88F2 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "text.plist.xml";
+			path = "native/Mac/Info.plist";
+			sourceTree = "SOURCE_ROOT";
+		};
+		A51DB463F5A85A1376D35B9D = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "text.plist.entitlements";
+			path = "native/Mac/ScrnshrMac.entitlements";
+			sourceTree = "SOURCE_ROOT";
+		};
+		2EAD7D467291B0D4CAE67CE3 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "text.plist.xml";
+			path = "native/iOS/Info.plist";
+			sourceTree = "SOURCE_ROOT";
+		};
+		4CB0DF8A55DAA87C09A9EBB9 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.c.h";
+			path = "native/iOS/ScrnshrPhone-Bridging-Header.h";
+			sourceTree = "SOURCE_ROOT";
+		};
+		55BE0FBC21171A817441859C = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "text.plist.entitlements";
+			path = "native/iOS/ScrnshrPhone.entitlements";
+			sourceTree = "SOURCE_ROOT";
+		};
+		1B20FFDABED9D5AB212B5003 = {
+			isa = "PBXFileReference";
+			explicitFileType = "wrapper.application";
+			includeInIndex = 0;
+			path = "ScrnshrPhone.app";
+			sourceTree = "BUILT_PRODUCTS_DIR";
+		};
+		C2CD12AAAA7FBDF50E395FDF = {
+			isa = "PBXFileReference";
+			explicitFileType = "wrapper.application";
+			includeInIndex = 0;
+			path = "ScrnshrMac.app";
+			sourceTree = "BUILT_PRODUCTS_DIR";
+		};
+		4F0BDF7D8AF9196A2D581403 = {
+			isa = "PBXFileReference";
+			explicitFileType = "wrapper.cfbundle";
+			includeInIndex = 0;
+			path = "ScrnshrTests.xctest";
+			sourceTree = "BUILT_PRODUCTS_DIR";
+		};
+		ACFF41076B517114ED806047 = {
+			isa = "PBXFileReference";
+			explicitFileType = "wrapper.cfbundle";
+			includeInIndex = 0;
+			path = "ScrnshrPhoneTests.xctest";
+			sourceTree = "BUILT_PRODUCTS_DIR";
+		};
+		878A52FC5FF6A57D50B7B870 = {
+			isa = "PBXGroup";
+			children = (
+				"8D86CD90466A2D5BBB864EE7",
+				"7E7C32E9B3DB930DB74CAA26",
+				"145D58E0500F7CF0E48FD2BB",
+				"5F42B8C7734682D25E22CE43",
+				"7FC14F208EDD9ABBCF06410B",
+				"E1A311EAABBAE93FB14F9D83",
+				"E89963312E55C1144DA08795",
+				"DD82764E0CB23058862680E6",
+				"96FFD0AA700D2020D54C8ACE",
+				"C15B63572DE24527F851E019",
+				"961564E3BD111274D57DDB94",
+				"1C6AC03B9F9CA4D9A0C212D9",
+				"88004D8A248F1AF554CADEC4",
+				"A262CB27BF58DAFD8530D7A9",
+				"1C2105057E6BC5202B0AFF53",
+				"34D66B069AD212B31514F596",
+				"C2D866573036078BFBACC0FF",
+				"B9324BE3FC4F3D39EB754763",
+				"24683DE3308DD7E01C8D8F68",
+				"A3AD28CDDC6395E7BF6D8709",
+				"D9AFD70B21D14B090B4D88F2",
+				"A51DB463F5A85A1376D35B9D",
+				"2EAD7D467291B0D4CAE67CE3",
+				"4CB0DF8A55DAA87C09A9EBB9",
+				"55BE0FBC21171A817441859C",
+			);
+			name = "Sources";
+			sourceTree = "<group>";
+		};
+		0A3E27B8CA818264D75C8D81 = {
+			isa = "PBXGroup";
+			children = (
+				"1B20FFDABED9D5AB212B5003",
+				"C2CD12AAAA7FBDF50E395FDF",
+				"4F0BDF7D8AF9196A2D581403",
+				"ACFF41076B517114ED806047",
+			);
+			name = "Products";
+			sourceTree = "<group>";
+		};
+		0D6E4079E36703EBD37C0072 = {
+			isa = "PBXGroup";
+			children = (
+				"878A52FC5FF6A57D50B7B870",
+				"0A3E27B8CA818264D75C8D81",
+			);
+			sourceTree = "<group>";
+		};
+		E3F3E42066591627A57130EA = {
+			isa = "XCRemoteSwiftPackageReference";
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = "exactVersion";
+				version = "155.0.0";
+			};
+		};
+		3D5D06619AD2FD8BA0F34D57 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_WARN_BOOL_CONVERSION = "YES";
+				CLANG_WARN_CONSTANT_CONVERSION = "YES";
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = "YES";
+				GCC_WARN_64_TO_32_BIT_CONVERSION = "YES";
+				GCC_WARN_UNDECLARED_SELECTOR = "YES";
+				GCC_WARN_UNUSED_FUNCTION = "YES";
+				GCC_WARN_UNUSED_VARIABLE = "YES";
+				SWIFT_VERSION = "5.0";
+				SWIFT_STRICT_CONCURRENCY = "targeted";
+				ENABLE_USER_SCRIPT_SANDBOXING = "YES";
+				DEBUG_INFORMATION_FORMAT = "dwarf";
+				ENABLE_TESTABILITY = "YES";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				ONLY_ACTIVE_ARCH = "YES";
+			};
+			name = "Debug";
+		};
+		61EE91C00F7653342CB155AF = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_WARN_BOOL_CONVERSION = "YES";
+				CLANG_WARN_CONSTANT_CONVERSION = "YES";
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = "YES";
+				GCC_WARN_64_TO_32_BIT_CONVERSION = "YES";
+				GCC_WARN_UNDECLARED_SELECTOR = "YES";
+				GCC_WARN_UNUSED_FUNCTION = "YES";
+				GCC_WARN_UNUSED_VARIABLE = "YES";
+				SWIFT_VERSION = "5.0";
+				SWIFT_STRICT_CONCURRENCY = "targeted";
+				ENABLE_USER_SCRIPT_SANDBOXING = "YES";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				SWIFT_COMPILATION_MODE = "wholemodule";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				ONLY_ACTIVE_ARCH = "NO";
+			};
+			name = "Release";
+		};
+		C8DAD5BF26524FC0F10AE30F = {
+			isa = "XCConfigurationList";
+			buildConfigurations = (
+				"3D5D06619AD2FD8BA0F34D57",
+				"61EE91C00F7653342CB155AF",
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = "Release";
+		};
+		AFD47C72C46B8F4498653526 = {
+			isa = "XCSwiftPackageProductDependency";
+			package = "E3F3E42066591627A57130EA";
+			productName = "WebRTC";
+		};
+		05199534FF3D9868DBEA0196 = {
+			isa = "PBXBuildFile";
+			productRef = "AFD47C72C46B8F4498653526";
+		};
+		B5E27424275A1A2047EFDAB2 = {
+			isa = "PBXBuildFile";
+			fileRef = "E1A311EAABBAE93FB14F9D83";
+		};
+		54DF5D031E9BB8C39B688AC2 = {
+			isa = "PBXBuildFile";
+			fileRef = "E89963312E55C1144DA08795";
+		};
+		27B304EEA6E882D3BD26BA35 = {
+			isa = "PBXBuildFile";
+			fileRef = "DD82764E0CB23058862680E6";
+		};
+		FD7C01B4DADC16C9D88A1E83 = {
+			isa = "PBXBuildFile";
+			fileRef = "96FFD0AA700D2020D54C8ACE";
+		};
+		CB0AA3FEA317F493E2F700FA = {
+			isa = "PBXBuildFile";
+			fileRef = "C15B63572DE24527F851E019";
+		};
+		EE2FB878F4C0272707443B2B = {
+			isa = "PBXBuildFile";
+			fileRef = "961564E3BD111274D57DDB94";
+		};
+		402F8921A51D31282A43CEDC = {
+			isa = "PBXBuildFile";
+			fileRef = "1C6AC03B9F9CA4D9A0C212D9";
+		};
+		016E8BC82ABB8CB3BF774306 = {
+			isa = "PBXBuildFile";
+			fileRef = "C2D866573036078BFBACC0FF";
+		};
+		4AAEA6D92B989A346D3D6E3D = {
+			isa = "PBXBuildFile";
+			fileRef = "B9324BE3FC4F3D39EB754763";
+		};
+		8A9B7E49198807A501283B98 = {
+			isa = "PBXBuildFile";
+			fileRef = "24683DE3308DD7E01C8D8F68";
+		};
+		6FCAB1D4DC1A6F055352EAD9 = {
+			isa = "PBXBuildFile";
+			fileRef = "8D86CD90466A2D5BBB864EE7";
+		};
+		118D4A3296DE9004C59CB100 = {
+			isa = "PBXSourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"B5E27424275A1A2047EFDAB2",
+				"54DF5D031E9BB8C39B688AC2",
+				"27B304EEA6E882D3BD26BA35",
+				"FD7C01B4DADC16C9D88A1E83",
+				"CB0AA3FEA317F493E2F700FA",
+				"EE2FB878F4C0272707443B2B",
+				"402F8921A51D31282A43CEDC",
+				"016E8BC82ABB8CB3BF774306",
+				"4AAEA6D92B989A346D3D6E3D",
+				"8A9B7E49198807A501283B98",
+				"6FCAB1D4DC1A6F055352EAD9",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		168A4272225D346527D1301B = {
+			isa = "PBXFrameworksBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"05199534FF3D9868DBEA0196",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9CF389CC6708210841AE41BA = {
+			isa = "PBXResourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		86D60A9B82F8F5F08D8C965F = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.phone";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = "iphoneos";
+				IPHONEOS_DEPLOYMENT_TARGET = "27.0";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = "NO";
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = "NO";
+				TARGETED_DEVICE_FAMILY = "1";
+				INFOPLIST_FILE = "native/iOS/Info.plist";
+				CODE_SIGN_ENTITLEMENTS = "native/iOS/ScrnshrPhone.entitlements";
+				SWIFT_OBJC_BRIDGING_HEADER = "native/iOS/ScrnshrPhone-Bridging-Header.h";
+			};
+			name = "Debug";
+		};
+		6BA9B7BC527D3894F4664238 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.phone";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = "iphoneos";
+				IPHONEOS_DEPLOYMENT_TARGET = "27.0";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = "NO";
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = "NO";
+				TARGETED_DEVICE_FAMILY = "1";
+				INFOPLIST_FILE = "native/iOS/Info.plist";
+				CODE_SIGN_ENTITLEMENTS = "native/iOS/ScrnshrPhone.entitlements";
+				SWIFT_OBJC_BRIDGING_HEADER = "native/iOS/ScrnshrPhone-Bridging-Header.h";
+			};
+			name = "Release";
+		};
+		785A81446197D21BB388F16A = {
+			isa = "XCConfigurationList";
+			buildConfigurations = (
+				"86D60A9B82F8F5F08D8C965F",
+				"6BA9B7BC527D3894F4664238",
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = "Release";
+		};
+		10DB0F63885AC975D023615E = {
+			isa = "PBXNativeTarget";
+			buildConfigurationList = "785A81446197D21BB388F16A";
+			buildPhases = (
+				"118D4A3296DE9004C59CB100",
+				"168A4272225D346527D1301B",
+				"9CF389CC6708210841AE41BA",
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "ScrnshrPhone";
+			packageProductDependencies = (
+				"AFD47C72C46B8F4498653526",
+			);
+			productName = "ScrnshrPhone";
+			productReference = "1B20FFDABED9D5AB212B5003";
+			productType = "com.apple.product-type.application";
+		};
+		3200F9FB4D73C55DD024B135 = {
+			isa = "XCSwiftPackageProductDependency";
+			package = "E3F3E42066591627A57130EA";
+			productName = "WebRTC";
+		};
+		9D76F7A52D01248D91566746 = {
+			isa = "PBXBuildFile";
+			productRef = "3200F9FB4D73C55DD024B135";
+		};
+		8AB550018429287AC4243F22 = {
+			isa = "PBXBuildFile";
+			fileRef = "E1A311EAABBAE93FB14F9D83";
+		};
+		E6CACA2D2210E31C49834DC5 = {
+			isa = "PBXBuildFile";
+			fileRef = "E89963312E55C1144DA08795";
+		};
+		E1152E2C75A0383193B8137F = {
+			isa = "PBXBuildFile";
+			fileRef = "DD82764E0CB23058862680E6";
+		};
+		C0C8FA602E8C2E916700C4C5 = {
+			isa = "PBXBuildFile";
+			fileRef = "96FFD0AA700D2020D54C8ACE";
+		};
+		7B90909340AF0AB8ED77D214 = {
+			isa = "PBXBuildFile";
+			fileRef = "C15B63572DE24527F851E019";
+		};
+		D9EDECA286C7AFAD8450B583 = {
+			isa = "PBXBuildFile";
+			fileRef = "961564E3BD111274D57DDB94";
+		};
+		64BF914407F9EAD5A2472797 = {
+			isa = "PBXBuildFile";
+			fileRef = "1C6AC03B9F9CA4D9A0C212D9";
+		};
+		627437CAD8E78F1E9061AB90 = {
+			isa = "PBXBuildFile";
+			fileRef = "7E7C32E9B3DB930DB74CAA26";
+		};
+		3DF6BF415E1B61CBDED2D4F7 = {
+			isa = "PBXBuildFile";
+			fileRef = "145D58E0500F7CF0E48FD2BB";
+		};
+		EDB4453A94DE7179EE1209EB = {
+			isa = "PBXBuildFile";
+			fileRef = "5F42B8C7734682D25E22CE43";
+		};
+		508CA3F8F9284585E7C2533C = {
+			isa = "PBXBuildFile";
+			fileRef = "7FC14F208EDD9ABBCF06410B";
+		};
+		F9767A133C213E5CFB8C1DC1 = {
+			isa = "PBXSourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"8AB550018429287AC4243F22",
+				"E6CACA2D2210E31C49834DC5",
+				"E1152E2C75A0383193B8137F",
+				"C0C8FA602E8C2E916700C4C5",
+				"7B90909340AF0AB8ED77D214",
+				"D9EDECA286C7AFAD8450B583",
+				"64BF914407F9EAD5A2472797",
+				"627437CAD8E78F1E9061AB90",
+				"3DF6BF415E1B61CBDED2D4F7",
+				"EDB4453A94DE7179EE1209EB",
+				"508CA3F8F9284585E7C2533C",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9ECADDEA092E3587DC056FFC = {
+			isa = "PBXFrameworksBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"9D76F7A52D01248D91566746",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD1C772FF908836296E9CC6C = {
+			isa = "PBXResourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		08A023C780EEE919A0051F11 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.mac";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = "macosx";
+				MACOSX_DEPLOYMENT_TARGET = "14.0";
+				INFOPLIST_FILE = "native/Mac/Info.plist";
+				CODE_SIGN_ENTITLEMENTS = "native/Mac/ScrnshrMac.entitlements";
+				ENABLE_HARDENED_RUNTIME = "YES";
+			};
+			name = "Debug";
+		};
+		8F36DBA174D72F9FF4B064B9 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.mac";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = "macosx";
+				MACOSX_DEPLOYMENT_TARGET = "14.0";
+				INFOPLIST_FILE = "native/Mac/Info.plist";
+				CODE_SIGN_ENTITLEMENTS = "native/Mac/ScrnshrMac.entitlements";
+				ENABLE_HARDENED_RUNTIME = "YES";
+			};
+			name = "Release";
+		};
+		32D6B66C2C07F20A8D8723A3 = {
+			isa = "XCConfigurationList";
+			buildConfigurations = (
+				"08A023C780EEE919A0051F11",
+				"8F36DBA174D72F9FF4B064B9",
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = "Release";
+		};
+		1BC22CD3AB67C13F0218F386 = {
+			isa = "PBXNativeTarget";
+			buildConfigurationList = "32D6B66C2C07F20A8D8723A3";
+			buildPhases = (
+				"F9767A133C213E5CFB8C1DC1",
+				"9ECADDEA092E3587DC056FFC",
+				"AD1C772FF908836296E9CC6C",
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "ScrnshrMac";
+			packageProductDependencies = (
+				"3200F9FB4D73C55DD024B135",
+			);
+			productName = "ScrnshrMac";
+			productReference = "C2CD12AAAA7FBDF50E395FDF";
+			productType = "com.apple.product-type.application";
+		};
+		CBCE07344EEB9FC196BC2C9F = {
+			isa = "XCSwiftPackageProductDependency";
+			package = "E3F3E42066591627A57130EA";
+			productName = "WebRTC";
+		};
+		3E9D94A3AD19FB4467A35EFC = {
+			isa = "PBXBuildFile";
+			productRef = "CBCE07344EEB9FC196BC2C9F";
+		};
+		144C032D5E8540E6BF588D4B = {
+			isa = "PBXBuildFile";
+			fileRef = "88004D8A248F1AF554CADEC4";
+		};
+		3584FD6BF3550A90C44986EB = {
+			isa = "PBXBuildFile";
+			fileRef = "A262CB27BF58DAFD8530D7A9";
+		};
+		3968CF419AA6DF1BCE044525 = {
+			isa = "PBXBuildFile";
+			fileRef = "1C2105057E6BC5202B0AFF53";
+		};
+		81187A82052039768889008A = {
+			isa = "PBXSourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"144C032D5E8540E6BF588D4B",
+				"3584FD6BF3550A90C44986EB",
+				"3968CF419AA6DF1BCE044525",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		87FDC02F15362D34A279FFEE = {
+			isa = "PBXFrameworksBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"3E9D94A3AD19FB4467A35EFC",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1F8AE7A72B84275C9339F117 = {
+			isa = "PBXResourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		11637871336730AF117B1F1B = {
+			isa = "PBXContainerItemProxy";
+			containerPortal = "244210E48437B6556980A702";
+			proxyType = 1;
+			remoteGlobalIDString = "1BC22CD3AB67C13F0218F386";
+			remoteInfo = "ScrnshrMac";
+		};
+		F7AE8D8E982BD067DB393E6C = {
+			isa = "PBXTargetDependency";
+			target = "1BC22CD3AB67C13F0218F386";
+			targetProxy = "11637871336730AF117B1F1B";
+		};
+		0586F9A077C2D0117178BDBA = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.tests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = "YES";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				SDKROOT = "macosx";
+				MACOSX_DEPLOYMENT_TARGET = "14.0";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ScrnshrMac.app/Contents/MacOS/ScrnshrMac";
+			};
+			name = "Debug";
+		};
+		42DCC62F8BEFC9143B16C74C = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.tests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = "YES";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				SDKROOT = "macosx";
+				MACOSX_DEPLOYMENT_TARGET = "14.0";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ScrnshrMac.app/Contents/MacOS/ScrnshrMac";
+			};
+			name = "Release";
+		};
+		C40FE5FA65C51863E9FDDCDE = {
+			isa = "XCConfigurationList";
+			buildConfigurations = (
+				"0586F9A077C2D0117178BDBA",
+				"42DCC62F8BEFC9143B16C74C",
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = "Release";
+		};
+		586E4F6D413C102153E728AC = {
+			isa = "PBXNativeTarget";
+			buildConfigurationList = "C40FE5FA65C51863E9FDDCDE";
+			buildPhases = (
+				"81187A82052039768889008A",
+				"87FDC02F15362D34A279FFEE",
+				"1F8AE7A72B84275C9339F117",
+			);
+			buildRules = (
+			);
+			dependencies = (
+				"F7AE8D8E982BD067DB393E6C",
+			);
+			name = "ScrnshrTests";
+			packageProductDependencies = (
+				"CBCE07344EEB9FC196BC2C9F",
+			);
+			productName = "ScrnshrTests";
+			productReference = "4F0BDF7D8AF9196A2D581403";
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		70D0EAA23CF7EBE0D64531AC = {
+			isa = "XCSwiftPackageProductDependency";
+			package = "E3F3E42066591627A57130EA";
+			productName = "WebRTC";
+		};
+		9459B31F3437765A7BFE2D92 = {
+			isa = "PBXBuildFile";
+			productRef = "70D0EAA23CF7EBE0D64531AC";
+		};
+		A45F66C0EEA8500A0A1529FF = {
+			isa = "PBXBuildFile";
+			fileRef = "34D66B069AD212B31514F596";
+		};
+		64D506DC61904F74F1607989 = {
+			isa = "PBXSourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"A45F66C0EEA8500A0A1529FF",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A47C07B6AE8BD418ECC0DA7C = {
+			isa = "PBXFrameworksBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+				"9459B31F3437765A7BFE2D92",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BDCFED310C7E62642236888B = {
+			isa = "PBXResourcesBuildPhase";
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EAA0AA859F4466FEE9973BF1 = {
+			isa = "PBXContainerItemProxy";
+			containerPortal = "244210E48437B6556980A702";
+			proxyType = 1;
+			remoteGlobalIDString = "10DB0F63885AC975D023615E";
+			remoteInfo = "ScrnshrPhone";
+		};
+		D22B2543A44D0C45D94BC649 = {
+			isa = "PBXTargetDependency";
+			target = "10DB0F63885AC975D023615E";
+			targetProxy = "EAA0AA859F4466FEE9973BF1";
+		};
+		C832F358D93CBFCEAEF43085 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.phone-tests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = "YES";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				SDKROOT = "iphoneos";
+				IPHONEOS_DEPLOYMENT_TARGET = "27.0";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = "NO";
+				TARGETED_DEVICE_FAMILY = "1";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ScrnshrPhone.app/ScrnshrPhone";
+				SWIFT_OBJC_BRIDGING_HEADER = "native/iOS/ScrnshrPhone-Bridging-Header.h";
+			};
+			name = "Debug";
+		};
+		BC2E1EC2C40694B78C6BD705 = {
+			isa = "XCBuildConfiguration";
+			buildSettings = {
+				CODE_SIGN_STYLE = "Automatic";
+				CURRENT_PROJECT_VERSION = "1";
+				MARKETING_VERSION = "0.1.0";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "systems.edmundlim.scrnshr.phone-tests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = "YES";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				SDKROOT = "iphoneos";
+				IPHONEOS_DEPLOYMENT_TARGET = "27.0";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = "NO";
+				TARGETED_DEVICE_FAMILY = "1";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ScrnshrPhone.app/ScrnshrPhone";
+				SWIFT_OBJC_BRIDGING_HEADER = "native/iOS/ScrnshrPhone-Bridging-Header.h";
+			};
+			name = "Release";
+		};
+		DDCBC93328D3F9169F636981 = {
+			isa = "XCConfigurationList";
+			buildConfigurations = (
+				"C832F358D93CBFCEAEF43085",
+				"BC2E1EC2C40694B78C6BD705",
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = "Release";
+		};
+		0D7569893B7B43D90E181DA8 = {
+			isa = "PBXNativeTarget";
+			buildConfigurationList = "DDCBC93328D3F9169F636981";
+			buildPhases = (
+				"64D506DC61904F74F1607989",
+				"A47C07B6AE8BD418ECC0DA7C",
+				"BDCFED310C7E62642236888B",
+			);
+			buildRules = (
+			);
+			dependencies = (
+				"D22B2543A44D0C45D94BC649",
+			);
+			name = "ScrnshrPhoneTests";
+			packageProductDependencies = (
+				"70D0EAA23CF7EBE0D64531AC",
+			);
+			productName = "ScrnshrPhoneTests";
+			productReference = "ACFF41076B517114ED806047";
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		244210E48437B6556980A702 = {
+			isa = "PBXProject";
+			attributes = {
+				BuildIndependentTargetsInParallel = "YES";
+				LastUpgradeCheck = "2710";
+				TargetAttributes = {
+					10DB0F63885AC975D023615E = {
+						CreatedOnToolsVersion = "27.1";
+					};
+					1BC22CD3AB67C13F0218F386 = {
+						CreatedOnToolsVersion = "27.1";
+					};
+					586E4F6D413C102153E728AC = {
+						CreatedOnToolsVersion = "27.1";
+						TestTargetID = "1BC22CD3AB67C13F0218F386";
+					};
+					0D7569893B7B43D90E181DA8 = {
+						CreatedOnToolsVersion = "27.1";
+						TestTargetID = "10DB0F63885AC975D023615E";
+					};
+				};
+			};
+			buildConfigurationList = "C8DAD5BF26524FC0F10AE30F";
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "en";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"en",
+				"Base",
+			);
+			mainGroup = "0D6E4079E36703EBD37C0072";
+			packageReferences = (
+				"E3F3E42066591627A57130EA",
+			);
+			productRefGroup = "0A3E27B8CA818264D75C8D81";
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				"10DB0F63885AC975D023615E",
+				"1BC22CD3AB67C13F0218F386",
+				"586E4F6D413C102153E728AC",
+				"0D7569893B7B43D90E181DA8",
+			);
+		};
+	};
+	rootObject = "244210E48437B6556980A702";
+}
