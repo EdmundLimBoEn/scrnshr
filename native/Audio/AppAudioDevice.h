@@ -14,6 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) uint64_t rejectedAudioBuffers;
 @property(nonatomic, readonly) uint64_t droppedAudioFrames;
 @property(nonatomic, readonly) uint64_t silentAudioFrames;
+@property(nonatomic, readonly) OSStatus lastRejectedAudioStatus;
+@property(nonatomic, readonly, copy) NSString *lastAudioRejectionReason;
 
 @end
 

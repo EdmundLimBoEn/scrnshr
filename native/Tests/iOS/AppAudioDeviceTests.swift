@@ -31,7 +31,7 @@ final class AppAudioDeviceTests: XCTestCase {
         let delivered = expectation(description: "stereo packet")
         audioDelegate.onPacket = { packet in if packet.index == 0 { delivered.fulfill() } }
         let values = (0..<480).flatMap { _ in [Float(0.5), Float(-0.5)] }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(values)))
+        try assertPush(makeSample(values))
         wait(for: [delivered], timeout: 2)
         let packet = try XCTUnwrap(audioDelegate.packets.first)
         XCTAssertTrue(packet.usedRenderCallback)
@@ -47,7 +47,7 @@ final class AppAudioDeviceTests: XCTestCase {
         let delivered = expectation(description: "converted mono packet")
         audioDelegate.onPacket = { packet in if packet.index == 0 { delivered.fulfill() } }
         let values: [Float] = [-2, 2, .nan, .infinity] + Array(repeating: 0, count: 476)
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(values, channels: 1)))
+        try assertPush(makeSample(values, channels: 1))
         wait(for: [delivered], timeout: 2)
         let packet = try XCTUnwrap(audioDelegate.packets.first)
         XCTAssertEqual(Array(packet.samples.prefix(8)), [.min, .min, .max, .max, 0, 0, 0, 0])
@@ -57,7 +57,7 @@ final class AppAudioDeviceTests: XCTestCase {
         let delivered = expectation(description: "planar stereo packet")
         audioDelegate.onPacket = { packet in if packet.index == 0 { delivered.fulfill() } }
         let values = Array(repeating: Float(0.5), count: 480) + Array(repeating: Float(-0.5), count: 480)
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(values, planar: true)))
+        try assertPush(makeSample(values, planar: true))
         wait(for: [delivered], timeout: 2)
         let packet = try XCTUnwrap(audioDelegate.packets.first)
         XCTAssertTrue(stride(from: 0, to: 960, by: 2).allSatisfy {
@@ -69,11 +69,12 @@ final class AppAudioDeviceTests: XCTestCase {
         let delivered = expectation(description: "three packets")
         delivered.expectedFulfillmentCount = 3
         audioDelegate.onPacket = { packet in if packet.index < 3 { delivered.fulfill() } }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 960)))
         wait(for: [delivered], timeout: 2)
         XCTAssertTrue(device.stopRecording())
         let packets = Array(audioDelegate.packets.prefix(3))
         XCTAssertEqual(packets.count, 3)
+        guard packets.count == 3 else { return }
         XCTAssertTrue(packets[1].samples.allSatisfy { $0 == 0 })
         XCTAssertTrue(packets[2].samples.allSatisfy { $0 == 0 })
         XCTAssertLessThan(packets[0].hostTime, packets[1].hostTime)
@@ -93,7 +94,7 @@ final class AppAudioDeviceTests: XCTestCase {
     func testOversizedInputIsBoundedAndResetStopsDeliveryUntilNewCapture() throws {
         let delivered = expectation(description: "bounded packet")
         audioDelegate.onPacket = { packet in if packet.index == 0 { delivered.fulfill() } }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 28_800))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 28_800)))
         wait(for: [delivered], timeout: 2)
         XCTAssertGreaterThanOrEqual(device.droppedAudioFrames, 9_600)
         device.reset()
@@ -114,7 +115,7 @@ final class AppAudioDeviceTests: XCTestCase {
         let unexpected = expectation(description: "interrupted audio stays stopped")
         unexpected.isInverted = true
         audioDelegate.onPacket = { _ in unexpected.fulfill() }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 960)))
         wait(for: [unexpected], timeout: 0.1)
         XCTAssertTrue(audioDelegate.packets.isEmpty)
 
@@ -122,7 +123,7 @@ final class AppAudioDeviceTests: XCTestCase {
         audioDelegate.flushAsyncDispatch()
         let delivered = expectation(description: "audio resumes after current interruption ends")
         audioDelegate.onPacket = { packet in if packet.index == 0 { delivered.fulfill() } }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 960)))
         wait(for: [delivered], timeout: 2)
     }
 
@@ -137,7 +138,7 @@ final class AppAudioDeviceTests: XCTestCase {
             XCTAssertFalse(device.isRecording)
             delivered.fulfill()
         }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 960)))
         wait(for: [delivered], timeout: 2)
         XCTAssertFalse(device.isRecording)
         XCTAssertEqual(audioDelegate.packets.count, 1)
@@ -153,7 +154,7 @@ final class AppAudioDeviceTests: XCTestCase {
             XCTAssertFalse(device.isRecording)
             delivered.fulfill()
         }
-        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        try assertPush(makeSample(Array(repeating: 0.25, count: 960)))
         wait(for: [delivered], timeout: 2)
         XCTAssertFalse(device.isInitialized)
         XCTAssertEqual(audioDelegate.packets.count, 1)
@@ -164,6 +165,22 @@ final class AppAudioDeviceTests: XCTestCase {
             name: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(),
             userInfo: [AVAudioSessionInterruptionTypeKey: type.rawValue]
         )
+    }
+
+    private func assertPush(_ sample: CMSampleBuffer, file: StaticString = #filePath, line: UInt = #line) {
+        guard !device.push(sampleBuffer: sample) else { return }
+        let metadata: String
+        if let description = CMSampleBufferGetFormatDescription(sample),
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description) {
+            let format = asbd.pointee
+            metadata = "rate=\(format.mSampleRate) channels=\(format.mChannelsPerFrame) flags=\(format.mFormatFlags) " +
+                "bits=\(format.mBitsPerChannel) bytesPerFrame=\(format.mBytesPerFrame) " +
+                "bytesPerPacket=\(format.mBytesPerPacket) framesPerPacket=\(format.mFramesPerPacket)"
+        } else {
+            metadata = "missing audio format"
+        }
+        XCTFail("App audio rejected: \(device.lastAudioRejectionReason); OSStatus \(device.lastRejectedAudioStatus); " +
+                "frames=\(CMSampleBufferGetNumSamples(sample)) \(metadata)", file: file, line: line)
     }
 
     private func makeSample(_ values: [Float], channels: Int = 2, rate: Double = 48_000, planar: Bool = false) throws -> CMSampleBuffer {
@@ -197,15 +214,11 @@ final class AppAudioDeviceTests: XCTestCase {
                 offsetIntoDestination: 0, dataLength: byteCount
             ))
         }
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: Int32(rate)),
-            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid
-        )
         var sample: CMSampleBuffer?
-        try requireSuccess(CMSampleBufferCreateReady(
-            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: description,
-            sampleCount: values.count / channels, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample
+        try requireSuccess(CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: kCFAllocatorDefault, dataBuffer: try XCTUnwrap(block), formatDescription: try XCTUnwrap(description),
+            sampleCount: values.count / channels, presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            packetDescriptions: nil, sampleBufferOut: &sample
         ))
         return try XCTUnwrap(sample)
     }

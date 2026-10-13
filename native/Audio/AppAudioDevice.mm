@@ -10,10 +10,12 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -57,6 +59,8 @@ struct AudioState {
     std::atomic<uint64_t> rejected{0};
     std::atomic<uint64_t> dropped{0};
     std::atomic<uint64_t> silent{0};
+    OSStatus lastRejectedStatus = noErr;
+    NSString *lastRejectionReason = @"";
 
     void resetTimeline() {
         head = 0;
@@ -179,15 +183,31 @@ int16_t ReadSample(const uint8_t *bytes, bool floatingPoint) {
     return static_cast<int16_t>(std::lround(sample * 32767.0f));
 }
 
+struct ConversionError {
+    std::string reason;
+    OSStatus status = noErr;
+};
+
+bool RejectPCM(ConversionError &error, std::string reason, OSStatus status = kAudio_ParamError) {
+    error.reason = std::move(reason);
+    error.status = status;
+    return false;
+}
+
+struct RetainedAudioBlock {
+    CMBlockBufferRef value = nullptr;
+    ~RetainedAudioBlock() { if (value) { CFRelease(value); } }
+};
+
 bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64_t &timestamp,
-                size_t &discardedFrames) {
+                size_t &discardedFrames, ConversionError &error) {
     const auto description = CMSampleBufferGetFormatDescription(sample);
-    if (!description) { return false; }
+    if (!description) { return RejectPCM(error, "Missing audio format description"); }
     const AudioStreamBasicDescription *format = CMAudioFormatDescriptionGetStreamBasicDescription(description);
     if (!format || format->mFormatID != kAudioFormatLinearPCM || format->mSampleRate != kSampleRate ||
         (format->mChannelsPerFrame != 1 && format->mChannelsPerFrame != 2) ||
         (format->mFormatFlags & kAudioFormatFlagIsBigEndian)) {
-        return false;
+        return RejectPCM(error, "Expected little-endian 48000 Hz linear PCM with one or two channels");
     }
     const bool floatingPoint = format->mFormatFlags & kAudioFormatFlagIsFloat;
     const bool planar = format->mFormatFlags & kAudioFormatFlagIsNonInterleaved;
@@ -195,32 +215,47 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
     if ((floatingPoint && format->mBitsPerChannel != 32) ||
         (!floatingPoint && (format->mBitsPerChannel != 16 || !(format->mFormatFlags & kAudioFormatFlagIsSignedInteger))) ||
         format->mBytesPerFrame != bytesPerSample * (planar ? 1 : format->mChannelsPerFrame)) {
-        return false;
+        return RejectPCM(error, "Expected packed Float32 or signed Int16 PCM with matching bytes per frame");
     }
     const CMItemCount sourceFrames = CMSampleBufferGetNumSamples(sample);
-    if (sourceFrames <= 0 || sourceFrames > static_cast<CMItemCount>(kSampleRate)) { return false; }
+    if (sourceFrames <= 0 || sourceFrames > static_cast<CMItemCount>(kSampleRate)) {
+        return RejectPCM(error, "Audio frame count outside 1...48000: " + std::to_string(sourceFrames));
+    }
 
-    alignas(AudioBufferList) std::array<uint8_t, sizeof(AudioBufferList) + sizeof(AudioBuffer)> storage{};
-    auto buffers = reinterpret_cast<AudioBufferList *>(storage.data());
-    CMBlockBufferRef retained = nullptr;
     size_t needed = 0;
+    const OSStatus queryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sample, &needed, nullptr, 0, kCFAllocatorDefault, kCFAllocatorDefault,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, nullptr);
+    if (queryStatus != noErr) {
+        return RejectPCM(error, "CoreMedia audio-buffer-list size query failed", queryStatus);
+    }
+    constexpr size_t maximumListBytes = 65536;
+    if (needed < offsetof(AudioBufferList, mBuffers) + sizeof(AudioBuffer) || needed > maximumListBytes) {
+        return RejectPCM(error, "CoreMedia requested unsupported audio-buffer-list size: " + std::to_string(needed));
+    }
+    std::vector<std::max_align_t> storage((needed + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+    auto buffers = reinterpret_cast<AudioBufferList *>(storage.data());
+    const size_t allocatedBytes = storage.size() * sizeof(std::max_align_t);
+    RetainedAudioBlock retained;
     const OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sample, &needed, buffers, storage.size(), kCFAllocatorDefault, kCFAllocatorDefault,
-        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &retained);
+        sample, &needed, buffers, allocatedBytes, kCFAllocatorDefault, kCFAllocatorDefault,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &retained.value);
     if (status != noErr) {
-        if (retained) { CFRelease(retained); }
-        return false;
+        return RejectPCM(error, "CoreMedia audio-buffer-list fill failed; requested " + std::to_string(needed) +
+            " bytes, allocated " + std::to_string(allocatedBytes), status);
     }
     const size_t expectedBuffers = planar ? format->mChannelsPerFrame : 1;
-    bool valid = needed <= storage.size() && buffers->mNumberBuffers == expectedBuffers;
-    for (size_t index = 0; valid && index < expectedBuffers; ++index) {
-        const AudioBuffer &buffer = buffers->mBuffers[index];
-        valid = buffer.mData && buffer.mNumberChannels == (planar ? 1 : format->mChannelsPerFrame) &&
-            buffer.mDataByteSize >= sourceFrames * format->mBytesPerFrame;
+    if (needed > allocatedBytes || buffers->mNumberBuffers != expectedBuffers) {
+        return RejectPCM(error, "Unexpected CoreMedia audio-buffer-list layout: " +
+            std::to_string(buffers->mNumberBuffers) + " buffers; expected " + std::to_string(expectedBuffers));
     }
-    if (!valid) {
-        if (retained) { CFRelease(retained); }
-        return false;
+    for (size_t index = 0; index < expectedBuffers; ++index) {
+        const AudioBuffer &buffer = buffers->mBuffers[index];
+        if (!buffer.mData || buffer.mNumberChannels != (planar ? 1 : format->mChannelsPerFrame) ||
+            buffer.mDataByteSize < sourceFrames * format->mBytesPerFrame) {
+            return RejectPCM(error, "Invalid PCM buffer " + std::to_string(index) + ": " +
+                std::to_string(buffer.mNumberChannels) + " channels, " + std::to_string(buffer.mDataByteSize) + " bytes");
+        }
     }
 
     CMTime presentation = CMSampleBufferGetPresentationTimeStamp(sample);
@@ -238,7 +273,6 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
             converted[frame * kChannels + channel] = ReadSample(bytes + offset, floatingPoint);
         }
     }
-    if (retained) { CFRelease(retained); }
     return true;
 }
 }
@@ -393,12 +427,17 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 }
 
 - (BOOL)pushSampleBuffer:(CMSampleBufferRef)sampleBuffer {
-    if (!CMSampleBufferIsValid(sampleBuffer) || !CMSampleBufferDataIsReady(sampleBuffer)) { return NO; }
     std::vector<int16_t> samples;
     int64_t timestamp;
     size_t discarded;
-    if (!ConvertPCM(sampleBuffer, samples, timestamp, discarded)) {
+    ConversionError error;
+    const bool ready = CMSampleBufferIsValid(sampleBuffer) && CMSampleBufferDataIsReady(sampleBuffer);
+    if (!ready) { error = {"Sample buffer is invalid or not ready", kCMSampleBufferError_BufferNotReady}; }
+    if (!ready || !ConvertPCM(sampleBuffer, samples, timestamp, discarded, error)) {
         _state->rejected++;
+        std::lock_guard<std::mutex> lock(_state->mutex);
+        _state->lastRejectedStatus = error.status;
+        _state->lastRejectionReason = [NSString stringWithUTF8String:error.reason.c_str()];
         return NO;
     }
     const size_t frames = samples.size() / kChannels;
@@ -510,5 +549,7 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 - (uint64_t)rejectedAudioBuffers { return _state->rejected.load(); }
 - (uint64_t)droppedAudioFrames { return _state->dropped.load(); }
 - (uint64_t)silentAudioFrames { return _state->silent.load(); }
+- (OSStatus)lastRejectedAudioStatus { std::lock_guard<std::mutex> lock(_state->mutex); return _state->lastRejectedStatus; }
+- (NSString *)lastAudioRejectionReason { std::lock_guard<std::mutex> lock(_state->mutex); return _state->lastRejectionReason; }
 
 @end
