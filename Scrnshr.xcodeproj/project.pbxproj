@@ -90,6 +90,12 @@
 			path = "native/Tests/PresentationTests.swift";
 			sourceTree = "SOURCE_ROOT";
 		};
+		A616C6DCD978EF05855B46C2 = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/SessionOperationTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
 		1C2105057E6BC5202B0AFF53 = {
 			isa = "PBXFileReference";
 			lastKnownFileType = "sourcecode.swift";
@@ -100,6 +106,12 @@
 			isa = "PBXFileReference";
 			lastKnownFileType = "sourcecode.swift";
 			path = "native/Tests/iOS/AppAudioDeviceTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
+		4CBAFED9311DEF0F2C1B63AD = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/iOS/PeerConnectionTests.swift";
 			sourceTree = "SOURCE_ROOT";
 		};
 		C2D866573036078BFBACC0FF = {
@@ -201,8 +213,10 @@
 				"1C6AC03B9F9CA4D9A0C212D9",
 				"88004D8A248F1AF554CADEC4",
 				"A262CB27BF58DAFD8530D7A9",
+				"A616C6DCD978EF05855B46C2",
 				"1C2105057E6BC5202B0AFF53",
 				"34D66B069AD212B31514F596",
+				"4CBAFED9311DEF0F2C1B63AD",
 				"C2D866573036078BFBACC0FF",
 				"B9324BE3FC4F3D39EB754763",
 				"24683DE3308DD7E01C8D8F68",
@@ -646,6 +660,10 @@
 			isa = "PBXBuildFile";
 			fileRef = "A262CB27BF58DAFD8530D7A9";
 		};
+		65DEDAFE22BB2AC9E9118CF7 = {
+			isa = "PBXBuildFile";
+			fileRef = "A616C6DCD978EF05855B46C2";
+		};
 		3968CF419AA6DF1BCE044525 = {
 			isa = "PBXBuildFile";
 			fileRef = "1C2105057E6BC5202B0AFF53";
@@ -656,6 +674,7 @@
 			files = (
 				"144C032D5E8540E6BF588D4B",
 				"3584FD6BF3550A90C44986EB",
+				"65DEDAFE22BB2AC9E9118CF7",
 				"3968CF419AA6DF1BCE044525",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -772,11 +791,16 @@
 			isa = "PBXBuildFile";
 			fileRef = "34D66B069AD212B31514F596";
 		};
+		3FB47389EA50A2DA17C6FEF9 = {
+			isa = "PBXBuildFile";
+			fileRef = "4CBAFED9311DEF0F2C1B63AD";
+		};
 		64D506DC61904F74F1607989 = {
 			isa = "PBXSourcesBuildPhase";
 			buildActionMask = 2147483647;
 			files = (
 				"A45F66C0EEA8500A0A1529FF",
+				"3FB47389EA50A2DA17C6FEF9",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

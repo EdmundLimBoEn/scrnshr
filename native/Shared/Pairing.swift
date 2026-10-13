@@ -106,6 +106,7 @@ struct SignalAuthenticationState: Codable {
     let sentSequence: UInt64
     let receivedSequence: UInt64?
     let retiredGenerations: Set<String>
+    let localOfferIdentity: String?
 }
 
 struct SignalAuthenticator {
@@ -116,10 +117,12 @@ struct SignalAuthenticator {
     private var sentSequence: UInt64 = 0
     private var receivedSequence: UInt64?
     private var retiredGenerations: Set<String> = []
+    private var localOfferIdentity: String?
 
     var checkpoint: SignalAuthenticationState {
         SignalAuthenticationState(generation: generation, sentSequence: sentSequence,
-                                  receivedSequence: receivedSequence, retiredGenerations: retiredGenerations)
+                                  receivedSequence: receivedSequence, retiredGenerations: retiredGenerations,
+                                  localOfferIdentity: localOfferIdentity)
     }
 
     init(sessionId: String, pairingKey: String, role: PeerRole,
@@ -133,15 +136,20 @@ struct SignalAuthenticator {
             sentSequence = checkpoint.sentSequence
             receivedSequence = checkpoint.receivedSequence
             retiredGenerations = checkpoint.retiredGenerations
+            localOfferIdentity = checkpoint.localOfferIdentity
         }
     }
 
     mutating func sign(_ signal: RTCSignal) throws -> (payload: String, mac: String) {
-        if case .offer = signal {
-            if let generation { retiredGenerations.insert(generation) }
-            generation = UUID().uuidString
-            sentSequence = 0
-            receivedSequence = nil
+        if case .offer(let sdp) = signal {
+            let identity = SDPNegotiationIdentity.make(sdp)
+            if generation == nil || localOfferIdentity != identity {
+                if let generation { retiredGenerations.insert(generation) }
+                generation = UUID().uuidString
+                sentSequence = 0
+                receivedSequence = nil
+            }
+            localOfferIdentity = identity
         }
         guard let generation else { throw PairingError.authenticationFailed }
         let envelope = AuthenticatedSignal(sessionId: sessionId, role: role, generation: generation,

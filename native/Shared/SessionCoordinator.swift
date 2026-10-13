@@ -54,7 +54,7 @@ final class SessionCoordinator: ObservableObject {
     @Published var ownerToken = ""
     @Published var isBusy = false
 
-    private let signaling = SignalingClient()
+    private let signaling: SignalingClient
     private var code: PairingCode?
     private var token: String?
     private var expiresAt: Date?
@@ -67,11 +67,14 @@ final class SessionCoordinator: ObservableObject {
     private var suppressCaptureCallbacks = false
     private var internetMediaConfigured = false
     private var awaitingReceiverRestart = false
+    private var sessionGeneration: UInt64 = 0
+    private var signalingGeneration: UInt64?
 
     var hasSession: Bool { code != nil || approved || isSharing || !manualSignals.isEmpty }
 
-    init(role: PeerRole) {
+    init(role: PeerRole, signaling: SignalingClient? = nil) {
         self.role = role
+        self.signaling = signaling ?? SignalingClient()
         serverAddress = UserDefaults.standard.string(forKey: "signaling-server") ?? ""
         #if os(iOS)
         let device = AppAudioDevice()
@@ -94,9 +97,11 @@ final class SessionCoordinator: ObservableObject {
 
     func startDirectSession() async {
         guard !isBusy else { return }
+        var operationGeneration = sessionGeneration
         isBusy = true
-        defer { isBusy = false }
-        await reset(endServerSession: true)
+        defer { if operationGeneration == sessionGeneration { isBusy = false } }
+        operationGeneration = await reset(endServerSession: true, preserveBusy: true)
+        guard operationGeneration == sessionGeneration else { return }
         mode = .direct
         approved = true
         connectivity = "Direct LAN"
@@ -109,18 +114,21 @@ final class SessionCoordinator: ObservableObject {
 
     func createInternetSession() async {
         guard !isBusy else { return }
+        var operationGeneration = sessionGeneration
         isBusy = true
-        defer { isBusy = false }
+        defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
             guard let server = URL(string: serverAddress) else { throw PairingError.invalidServer }
             _ = try PairingCode.validateServer(server)
             guard !ownerToken.isEmpty else {
                 throw NSError(domain: "scrnshr", code: 1, userInfo: [NSLocalizedDescriptionKey: "Enter the server's owner credential first."])
             }
-            await reset(endServerSession: true)
+            operationGeneration = await reset(endServerSession: true, preserveBusy: true)
+            guard operationGeneration == sessionGeneration else { return }
             mode = .internet
             status = "Creating session"
             let created = try await signaling.createSession(server: server, ownerToken: ownerToken)
+            guard operationGeneration == sessionGeneration else { return }
             let expiration = try created.expiration
             let pairing = try PairingCode(server: server, sessionId: created.sessionId,
                                           joinToken: created.joinToken, expiresAt: expiration)
@@ -133,47 +141,54 @@ final class SessionCoordinator: ObservableObject {
             try KeychainStore.save(Data(ownerToken.utf8), account: "owner-token")
             try saveSession()
             let ice = try await signaling.iceConfiguration(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
+            guard operationGeneration == sessionGeneration else { return }
             connectivity = ice.connectivity
             media.configure(iceServers: ice.iceServers, relayOnly: relayOnly)
             internetMediaConfigured = true
+            signalingGeneration = operationGeneration
             try signaling.connect(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
             scheduleExpiry(expiration)
             status = "Scan the code on the iPhone."
             #if os(macOS)
             presentation.showWindow()
             #endif
-        } catch { fail(error) }
+        } catch { if operationGeneration == sessionGeneration { fail(error) } }
     }
 
     func joinInternetSession(_ text: String) async {
         guard !isBusy else { return }
+        var operationGeneration = sessionGeneration
         isBusy = true
-        defer { isBusy = false }
+        defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
             let pairing = try PairingCode.parse(text)
-            await reset(endServerSession: true)
+            operationGeneration = await reset(endServerSession: true, preserveBusy: true)
+            guard operationGeneration == sessionGeneration else { return }
             mode = .internet
             code = pairing
             token = pairing.joinToken
             expiresAt = pairing.expiresAt
             authenticator = try SignalAuthenticator(sessionId: pairing.sessionId, pairingKey: pairing.pairingKey, role: role)
             serverAddress = pairing.server.absoluteString
+            signalingGeneration = operationGeneration
             try signaling.connect(server: pairing.server, sessionId: pairing.sessionId, token: pairing.joinToken)
             status = "Waiting for approval on the Mac."
             scheduleExpiry(pairing.expiresAt)
-        } catch { fail(error) }
+        } catch { if operationGeneration == sessionGeneration { fail(error) } }
     }
 
     func restoreSession() async {
         guard !isBusy else { return }
+        var operationGeneration = sessionGeneration
         isBusy = true
-        defer { isBusy = false }
+        defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
             guard let data = try KeychainStore.load(account: "session-\(role.rawValue)") else { throw PairingError.expired }
             let saved = try JSONDecoder().decode(SavedSession.self, from: data)
             guard saved.expiresAt > .now else { throw PairingError.expired }
             _ = try PairingCode.validateServer(saved.code.server)
-            await reset()
+            operationGeneration = await reset(preserveBusy: true)
+            guard operationGeneration == sessionGeneration else { return }
             mode = .internet
             code = saved.code
             token = saved.token
@@ -182,14 +197,16 @@ final class SessionCoordinator: ObservableObject {
                                                     role: role, checkpoint: saved.authentication)
             awaitingReceiverRestart = role == .receiver
             approved = true
-            try await configureInternetMedia()
+            try await configureInternetMedia(expectedGeneration: operationGeneration)
+            guard operationGeneration == sessionGeneration else { return }
+            signalingGeneration = operationGeneration
             try signaling.connect(server: saved.code.server, sessionId: saved.code.sessionId, token: saved.token)
             scheduleExpiry(saved.expiresAt)
             status = role == .sender ? "Connected. Approve screen sharing again to resume." : "Waiting for the phone to reconnect."
             #if os(macOS)
             presentation.showWindow()
             #endif
-        } catch { fail(error) }
+        } catch { if operationGeneration == sessionGeneration { fail(error) } }
     }
 
     func approvePhone(_ accepted: Bool) {
@@ -222,15 +239,23 @@ final class SessionCoordinator: ObservableObject {
     #endif
 
     func stop() async {
+        sessionGeneration &+= 1
+        var operationGeneration = sessionGeneration
+        signalingGeneration = nil
+        isBusy = true
+        defer { if operationGeneration == sessionGeneration { isBusy = false } }
         media.sendCaptureStatus(.stopped)
         #if os(macOS)
         presentation.setCaptureStatus(.stopped)
         #endif
         #if os(iOS)
         await capture.stop()
+        guard operationGeneration == sessionGeneration else { return }
         #endif
         await signaling.endSession()
-        await reset()
+        guard operationGeneration == sessionGeneration else { return }
+        operationGeneration = await reset(preserveBusy: true)
+        guard operationGeneration == sessionGeneration else { return }
         KeychainStore.delete(account: "session-\(role.rawValue)")
         canRestore = false
         status = "Sharing stopped"
@@ -239,11 +264,17 @@ final class SessionCoordinator: ObservableObject {
         #endif
     }
 
-    private func reset(endServerSession: Bool = false) async {
+    @discardableResult
+    private func reset(endServerSession: Bool = false, preserveBusy: Bool = false) async -> UInt64 {
+        sessionGeneration &+= 1
+        let operationGeneration = sessionGeneration
+        signalingGeneration = nil
+        isBusy = preserveBusy
         expiryTask?.cancel()
         suppressCaptureCallbacks = true
         #if os(iOS)
         await capture.stop()
+        guard operationGeneration == sessionGeneration else { return operationGeneration }
         audioDevice.reset()
         #endif
         suppressCaptureCallbacks = false
@@ -253,6 +284,7 @@ final class SessionCoordinator: ObservableObject {
             presentation.setCaptureStatus(.stopped)
             #endif
             await signaling.endSession()
+            guard operationGeneration == sessionGeneration else { return operationGeneration }
         }
         signaling.close()
         media.close()
@@ -272,6 +304,7 @@ final class SessionCoordinator: ObservableObject {
         importedCounts = [:]
         manualOutput = ""
         error = nil
+        return operationGeneration
     }
 
     private func installCallbacks() {
@@ -312,16 +345,24 @@ final class SessionCoordinator: ObservableObject {
         presentation.onMuteChanged = { [weak media] muted in media?.setRemoteAudioMuted(muted) }
         #endif
         signaling.onMessage = { [weak self] message in
-            Task { @MainActor in await self?.receive(message) }
+            guard let self, let generation = self.signalingGeneration else { return }
+            Task { @MainActor [weak self] in await self?.receive(message, expectedGeneration: generation) }
         }
         signaling.onAvailability = { [weak self] available in
             guard let self else { return }
+            guard self.signalingGeneration == self.sessionGeneration else {
+                if !available { self.signalingAvailable = false }
+                return
+            }
             let regained = available && !self.signalingAvailable
             self.signalingAvailable = available
             if regained, self.role == .sender, self.isSharing, self.approved,
                self.media.connectionState != .connected { self.media.startOffer() }
         }
-        signaling.onError = { [weak self] message in self?.error = message }
+        signaling.onError = { [weak self] message in
+            guard let self, self.signalingGeneration == self.sessionGeneration else { return }
+            self.error = message
+        }
     }
 
     private func send(_ signal: RTCSignal) {
@@ -349,7 +390,8 @@ final class SessionCoordinator: ObservableObject {
         } catch { fail(error) }
     }
 
-    private func receive(_ message: ServerMessage) async {
+    private func receive(_ message: ServerMessage, expectedGeneration: UInt64) async {
+        guard expectedGeneration == sessionGeneration else { return }
         do {
             switch message.type {
             case "waiting": status = "Waiting for the other device"
@@ -363,7 +405,8 @@ final class SessionCoordinator: ObservableObject {
                     signaling.updateToken(resume)
                     if let code { expiresAt = code.expiresAt; scheduleExpiry(code.expiresAt) }
                 }
-                try await configureInternetMedia()
+                try await configureInternetMedia(expectedGeneration: expectedGeneration)
+                guard expectedGeneration == sessionGeneration else { return }
                 approved = true
                 try saveSession()
                 if awaitingReceiverRestart, authenticator?.generation != nil {
@@ -383,20 +426,25 @@ final class SessionCoordinator: ObservableObject {
                 status = "The other device disconnected. Waiting for it to return."
             case "rejected", "ended":
                 media.sendCaptureStatus(.stopped)
-                await reset()
+                let resetGeneration = await reset()
+                guard resetGeneration == sessionGeneration else { return }
                 KeychainStore.delete(account: "session-\(role.rawValue)")
                 canRestore = false
                 status = message.type == "rejected" ? "The Mac declined this phone." : "Session ended"
             case "error": error = message.message ?? "The signaling server could not complete the request."
             default: throw PairingError.invalidCode
             }
-        } catch { fail(error) }
+        } catch { if expectedGeneration == sessionGeneration { fail(error) } }
     }
 
-    private func configureInternetMedia() async throws {
+    private func configureInternetMedia(expectedGeneration: UInt64) async throws {
+        guard expectedGeneration == sessionGeneration else { throw CancellationError() }
         guard !internetMediaConfigured else { return }
         guard let code, let token else { throw PairingError.invalidCode }
         let ice = try await signaling.iceConfiguration(server: code.server, sessionId: code.sessionId, token: token)
+        guard expectedGeneration == sessionGeneration, self.code?.sessionId == code.sessionId else {
+            throw CancellationError()
+        }
         connectivity = ice.connectivity
         media.configure(iceServers: ice.iceServers, relayOnly: relayOnly)
         internetMediaConfigured = true

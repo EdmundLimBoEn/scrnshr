@@ -57,11 +57,17 @@ final class SignalingClient {
     private var token: String?
     private var intentionallyClosed = true
     private var reconnectAttempts = 0
-    private var session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 15
-        return URLSession(configuration: configuration)
-    }()
+    private let session: URLSession
+
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 15
+            self.session = URLSession(configuration: configuration)
+        }
+    }
 
     func createSession(server: URL, ownerToken: String) async throws -> CreatedSession {
         var request = URLRequest(url: server.appendingPathComponent("v1/sessions"))

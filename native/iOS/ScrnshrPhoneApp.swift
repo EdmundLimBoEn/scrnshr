@@ -14,6 +14,7 @@ private struct PhoneControls: View {
     @ObservedObject var session: SessionCoordinator
     @State private var joinCode = ""
     @State private var scanning = false
+    @State private var scannedCode: String?
     @State private var pendingCode: String?
     @State private var pairingHost = ""
     @State private var showingCalibration = false
@@ -29,7 +30,7 @@ private struct PhoneControls: View {
                         ForEach(SessionCoordinator.Mode.allCases, id: \.self) { mode in Text(mode.rawValue).tag(mode) }
                     }.pickerStyle(.segmented).disabled(session.hasSession || session.isBusy)
                     if session.mode == .internet {
-                        Button("Scan Mac code") { scanning = true }
+                        Button("Scan Mac code") { scannedCode = nil; scanning = true }
                             .buttonStyle(.borderedProminent)
                         TextField("Paste a scrnshr pairing link", text: $joinCode, axis: .vertical)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -58,12 +59,20 @@ private struct PhoneControls: View {
                 }.padding()
             }
             .navigationTitle("scrnshr")
-            .sheet(isPresented: $scanning) {
+            .sheet(isPresented: $scanning, onDismiss: {
+                if let value = scannedCode {
+                    scannedCode = nil
+                    confirmPairing(value)
+                }
+            }) {
                 NavigationStack {
-                        QRCodeScanner(onCode: { value in scanning = false; confirmPairing(value) },
-                                      onError: { session.error = $0 })
+                    QRCodeScanner(onCode: { value in
+                        guard scanning else { return }
+                        scannedCode = value
+                        scanning = false
+                    }, onError: { session.error = $0 })
                         .navigationTitle("Scan Mac code")
-                        .toolbar { Button("Cancel") { scanning = false } }
+                        .toolbar { Button("Cancel") { scannedCode = nil; scanning = false } }
                 }
             }
             .fullScreenCover(isPresented: $showingCalibration) {

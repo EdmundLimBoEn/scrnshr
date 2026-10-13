@@ -84,6 +84,42 @@ final class PairingTests: XCTestCase {
         XCTAssertEqual(try restored.verify(payload: fresh.payload, mac: fresh.mac), .offer("fresh"))
     }
 
+    func testOutstandingOfferRetryKeepsGenerationAndAdvancesSequenceAcrossCheckpoint() throws {
+        var phone = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .sender)
+        var mac = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .receiver)
+        let sdp = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=mid:0\r\na=ice-ufrag:first\r\na=sendonly\r\n"
+        let first = try phone.sign(.offer(sdp))
+        _ = try mac.verify(payload: first.payload, mac: first.mac)
+        let firstEnvelope = try JSONDecoder().decode(AuthenticatedSignal.self, from: Data(first.payload.utf8))
+        let checkpoint = try JSONDecoder().decode(SignalAuthenticationState.self, from: JSONEncoder().encode(phone.checkpoint))
+        phone = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .sender, checkpoint: checkpoint)
+        let gathered = sdp.replacingOccurrences(of: "m=video 9 ", with: "m=video 5000 ")
+            .replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 192.0.2.1")
+            .replacingOccurrences(of: "a=rtcp:9 IN IP4 0.0.0.0", with: "a=rtcp:5001 IN IP4 192.0.2.1")
+            + "a=candidate:1 1 udp 2122260223 192.0.2.1 5000 typ host\r\na=end-of-candidates\r\n"
+        let retry = try phone.sign(.offer(gathered))
+        let retryEnvelope = try JSONDecoder().decode(AuthenticatedSignal.self, from: Data(retry.payload.utf8))
+        XCTAssertEqual(retryEnvelope.generation, firstEnvelope.generation)
+        XCTAssertGreaterThan(retryEnvelope.sequence, firstEnvelope.sequence)
+        XCTAssertEqual(try mac.verify(payload: retry.payload, mac: retry.mac), .offer(gathered))
+        XCTAssertThrowsError(try mac.verify(payload: first.payload, mac: first.mac))
+        let answer = try mac.sign(.answer("answer-to-the-outstanding-offer"))
+        XCTAssertEqual(try phone.verify(payload: answer.payload, mac: answer.mac), .answer("answer-to-the-outstanding-offer"))
+    }
+
+    func testSDPDirectionOrICECredentialChangesStartNewGeneration() throws {
+        var phone = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .sender)
+        let base = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=ice-ufrag:first\r\na=sendonly\r\n"
+        let first = try phone.sign(.offer(base))
+        let direction = try phone.sign(.offer(base.replacingOccurrences(of: "a=sendonly", with: "a=inactive")))
+        let ice = try phone.sign(.offer(base.replacingOccurrences(of: "a=ice-ufrag:first", with: "a=ice-ufrag:second")))
+        let rejected = try phone.sign(.offer(base.replacingOccurrences(of: "m=video 9 ", with: "m=video 0 ")))
+        let envelopes = try [first, direction, ice, rejected].map {
+            try JSONDecoder().decode(AuthenticatedSignal.self, from: Data($0.payload.utf8))
+        }
+        XCTAssertEqual(Set(envelopes.map(\.generation)).count, 4)
+    }
+
     func testManualBundleRejectsOwnRoleAndAcceptsPeer() throws {
         let bundle = ManualSignalBundle(version: 1, id: UUID(), role: .sender, signals: [.offer("offer")])
         let data = try JSONEncoder().encode(bundle)

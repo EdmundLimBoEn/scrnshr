@@ -36,6 +36,10 @@ public final class WebRTCSession: NSObject, ObservableObject {
     private var pendingICE: [RTCIceCandidate] = []
     private var pendingLocalICE: [RTCIceCandidate] = []
     private var pendingDescriptions: [RTCSignal] = []
+    private var activeOfferIdentity: String?
+    private var activeAnswerIdentity: String?
+    private var cachedOfferIdentity: String?
+    private var cachedAnswer: String?
     private var applyingDescription = false
     private var creatingOffer = false
     private var offerPending = false
@@ -248,18 +252,62 @@ public final class WebRTCSession: NSObject, ObservableObject {
             } else {
                 addICE(ice, to: peer)
             }
-        case .offer, .answer:
-            guard pendingDescriptions.count < 4 else {
-                fail("Too many overlapping session descriptions arrived.")
-                return
+        case .offer(let sdp):
+            if role == .receiver {
+                let identity = SDPNegotiationIdentity.make(sdp)
+                if activeOfferIdentity == identity {
+                    acceptEmbeddedICE(sdp)
+                    return
+                }
+                if let index = pendingDescriptions.firstIndex(where: {
+                    if case .offer(let queued) = $0 { return SDPNegotiationIdentity.make(queued) == identity }
+                    return false
+                }) {
+                    pendingDescriptions[index] = signal
+                    return
+                }
+                if cachedOfferIdentity == identity, let cachedAnswer {
+                    acceptEmbeddedICE(sdp)
+                    onSignal?(.answer(peer.localDescription?.sdp ?? cachedAnswer))
+                    flushLocalICE()
+                    return
+                }
             }
-            pendingDescriptions.append(signal)
-            applyNextDescription()
+            enqueueDescription(signal)
+        case .answer(let sdp):
+            if role == .sender {
+                if hasNegotiated, peer.signalingState == .stable {
+                    acceptEmbeddedICE(sdp)
+                    return
+                }
+                let identity = SDPNegotiationIdentity.make(sdp)
+                if activeAnswerIdentity == identity {
+                    acceptEmbeddedICE(sdp)
+                    return
+                }
+                if let index = pendingDescriptions.firstIndex(where: {
+                    if case .answer(let queued) = $0 { return SDPNegotiationIdentity.make(queued) == identity }
+                    return false
+                }) {
+                    pendingDescriptions[index] = signal
+                    return
+                }
+            }
+            enqueueDescription(signal)
         case .restart:
             guard role == .sender, hasNegotiated, localCaptureStatus == .sharing else { return }
             restartPending = true
             startOffer()
         }
+    }
+
+    private func enqueueDescription(_ signal: RTCSignal) {
+        guard pendingDescriptions.count < 4 else {
+            fail("Too many overlapping session descriptions arrived.")
+            return
+        }
+        pendingDescriptions.append(signal)
+        applyNextDescription()
     }
 
     public nonisolated func sendVideo(_ sampleBuffer: CMSampleBuffer) {
@@ -308,6 +356,10 @@ public final class WebRTCSession: NSObject, ObservableObject {
         pendingICE.removeAll()
         pendingLocalICE.removeAll()
         pendingDescriptions.removeAll()
+        activeOfferIdentity = nil
+        activeAnswerIdentity = nil
+        cachedOfferIdentity = nil
+        cachedAnswer = nil
         applyingDescription = false
         creatingOffer = false
         offerPending = false
@@ -350,9 +402,15 @@ public final class WebRTCSession: NSObject, ObservableObject {
         switch signal {
         case .offer(let sdp) where role == .receiver:
             description = RTCSessionDescription(type: .offer, sdp: sdp)
+            activeOfferIdentity = SDPNegotiationIdentity.make(sdp)
             isOffer = true
         case .answer(let sdp) where role == .sender:
+            if hasNegotiated, peer.signalingState == .stable {
+                applyNextDescription()
+                return
+            }
             description = RTCSessionDescription(type: .answer, sdp: sdp)
+            activeAnswerIdentity = SDPNegotiationIdentity.make(sdp)
             isOffer = false
         default:
             onError?("Only the iPhone sender can create a media offer.")
@@ -365,7 +423,7 @@ public final class WebRTCSession: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self, self.peer === peer else { return }
                 guard error == nil else {
-                    self.applyingDescription = false
+                    self.clearActiveDescription()
                     self.fail(error!.localizedDescription)
                     self.applyNextDescription()
                     return
@@ -387,7 +445,7 @@ public final class WebRTCSession: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self, self.peer === peer else { return }
                 guard let description, error == nil else {
-                    self.applyingDescription = false
+                    self.clearActiveDescription()
                     self.fail(error?.localizedDescription ?? "The media answer could not be created.")
                     return
                 }
@@ -395,10 +453,12 @@ public final class WebRTCSession: NSObject, ObservableObject {
                     Task { @MainActor in
                         guard let self, self.peer === peer else { return }
                         guard error == nil else {
-                            self.applyingDescription = false
+                            self.clearActiveDescription()
                             self.fail(error!.localizedDescription)
                             return
                         }
+                        self.cachedOfferIdentity = self.activeOfferIdentity
+                        self.cachedAnswer = description.sdp
                         self.onSignal?(.answer(description.sdp))
                         self.flushLocalICE()
                         self.finishDescription()
@@ -410,7 +470,7 @@ public final class WebRTCSession: NSObject, ObservableObject {
 
     private func finishDescription() {
         hasNegotiated = true
-        applyingDescription = false
+        clearActiveDescription()
         if let peer {
             let candidates = pendingICE
             pendingICE.removeAll()
@@ -419,6 +479,27 @@ public final class WebRTCSession: NSObject, ObservableObject {
         flushLocalICE()
         applyNextDescription()
         if offerPending { startOffer() }
+    }
+
+    private func clearActiveDescription() {
+        applyingDescription = false
+        activeOfferIdentity = nil
+        activeAnswerIdentity = nil
+    }
+
+    private func acceptEmbeddedICE(_ sdp: String) {
+        var index: Int32 = -1
+        var mid: String?
+        for line in sdp.components(separatedBy: .newlines) {
+            if line.hasPrefix("m=") {
+                index += 1
+                mid = nil
+            } else if line.hasPrefix("a=mid:") {
+                mid = String(line.dropFirst(6))
+            } else if line.hasPrefix("a=candidate:"), index >= 0 {
+                accept(.ice(candidate: String(line.dropFirst(2)), sdpMid: mid, sdpMLineIndex: index))
+            }
+        }
     }
 
     private func addICE(_ candidate: RTCIceCandidate, to peer: RTCPeerConnection) {

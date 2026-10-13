@@ -112,6 +112,27 @@ struct CaptureHeartbeatWatchdog {
     }
 }
 
+enum SDPNegotiationIdentity {
+    static func make(_ sdp: String) -> String {
+        sdp.components(separatedBy: .newlines)
+            .filter { !$0.isEmpty && !$0.hasPrefix("a=candidate:") && $0 != "a=end-of-candidates" }
+            .map { line in
+                // WebRTC's AddCandidate rewrites c= and the nonzero m= port as gathering progresses.
+                if line.hasPrefix("c=IN IP4 ") || line.hasPrefix("c=IN IP6 ") { return "c=IN IP4 0.0.0.0" }
+                if line.hasPrefix("a=rtcp:") { return "a=rtcp:9" }
+                if line.hasPrefix("m=") {
+                    var parts = line.components(separatedBy: " ")
+                    if parts.count >= 4, let port = Int(parts[1]), port > 0 {
+                        parts[1] = "9"
+                        return parts.joined(separator: " ")
+                    }
+                }
+                return line
+            }
+            .joined(separator: "\n")
+    }
+}
+
 /// EXIF orientation is applied at the frame boundary, before native rendering.
 struct ScreenFrameOrientation: Equatable {
     let rotationDegrees: Int
