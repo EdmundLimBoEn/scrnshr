@@ -41,7 +41,12 @@ struct AudioState {
     bool interrupted = false;
     bool shutdown = false;
     bool timeline = false;
+    bool terminating = false;
+    bool deliveryInFlight = false;
+    std::thread::id callbackThread;
+    uint64_t lifecycleGeneration = 0;
     uint64_t interruptionGeneration = 0;
+    dispatch_block_t afterDelivery = nil;
     std::array<int16_t, kCapacityFrames * kChannels> ring{};
     size_t head = 0;
     size_t count = 0;
@@ -68,22 +73,30 @@ struct AudioState {
     }
 };
 
-void DeliverAudio(AudioState *state) {
+void WaitForDelivery(AudioState *state, std::unique_lock<std::mutex> &lock) {
+    if (state->callbackThread != std::this_thread::get_id()) {
+        state->wake.wait(lock, [state] { return !state->deliveryInFlight; });
+    }
+}
+
+void DeliverAudio(std::shared_ptr<AudioState> state, uint64_t generation) {
     @autoreleasepool {
         [NSThread currentThread].name = @"scrnshr app audio";
     }
     std::unique_lock<std::mutex> lock(state->mutex);
     auto deadline = std::chrono::steady_clock::now();
-    while (!state->shutdown) {
-        state->wake.wait(lock, [state] {
-            return state->shutdown || (state->recording && !state->interrupted && state->timeline);
+    while (!state->shutdown && state->lifecycleGeneration == generation) {
+        state->wake.wait(lock, [&state, generation] {
+            return state->shutdown || state->lifecycleGeneration != generation ||
+                (state->recording && !state->interrupted && state->timeline);
         });
-        if (state->shutdown) { break; }
+        if (state->shutdown || state->lifecycleGeneration != generation) { break; }
         auto now = std::chrono::steady_clock::now();
         if (now > deadline + std::chrono::milliseconds(10)) { deadline = now; }
         deadline += std::chrono::milliseconds(10);
-        if (state->wake.wait_until(lock, deadline, [state] {
-                return state->shutdown || !state->recording || state->interrupted || !state->timeline;
+        if (state->wake.wait_until(lock, deadline, [&state, generation] {
+                return state->shutdown || state->lifecycleGeneration != generation ||
+                    !state->recording || state->interrupted || !state->timeline;
             })) {
             continue;
         }
@@ -115,9 +128,14 @@ void DeliverAudio(AudioState *state) {
         audioTimestamp.mHostTime = CMClockConvertHostTimeToSystemUnits(CMTimeMake(timestamp, 1000000000));
         audioTimestamp.mFlags = kAudioTimeStampHostTimeValid;
         AudioUnitRenderActionFlags flags = 0;
+        __attribute__((objc_precise_lifetime)) id<RTCAudioDeviceDelegate> delegate = state->delegate;
+        state->deliveryInFlight = true;
+        state->callbackThread = std::this_thread::get_id();
+        // WebRTC callbacks can synchronously query or stop this device.
+        lock.unlock();
         @autoreleasepool {
             // The pinned ADM's prefilled stereo path counts frames as samples. Its render path handles both channels.
-            state->delegate.deliverRecordedData(&flags, &audioTimestamp, 0, kPacketFrames, nullptr, packet.data(),
+            delegate.deliverRecordedData(&flags, &audioTimestamp, 0, kPacketFrames, nullptr, packet.data(),
                 ^OSStatus(AudioUnitRenderActionFlags *renderFlags, const AudioTimeStamp *renderTimestamp,
                           NSInteger bus, UInt32 frames, AudioBufferList *buffers, void *context) {
                     const UInt32 byteCount = frames * kChannels * sizeof(int16_t);
@@ -130,6 +148,19 @@ void DeliverAudio(AudioState *state) {
                     buffers->mBuffers[0].mDataByteSize = byteCount;
                     return noErr;
                 });
+            delegate = nil;
+        }
+        lock.lock();
+        state->deliveryInFlight = false;
+        state->callbackThread = std::thread::id();
+        dispatch_block_t afterDelivery = state->afterDelivery;
+        state->afterDelivery = nil;
+        state->wake.notify_all();
+        if (afterDelivery) {
+            lock.unlock();
+            afterDelivery();
+            afterDelivery = nil;
+            lock.lock();
         }
     }
 }
@@ -213,12 +244,12 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 }
 
 @implementation AppAudioDevice {
-    std::unique_ptr<AudioState> _state;
+    std::shared_ptr<AudioState> _state;
 }
 
 - (instancetype)init {
     if ((self = [super init])) {
-        _state = std::make_unique<AudioState>();
+        _state = std::make_shared<AudioState>();
         NSNotificationCenter *notifications = NSNotificationCenter.defaultCenter;
         [notifications addObserver:self selector:@selector(audioInterruption:)
                               name:AVAudioSessionInterruptionNotification object:nil];
@@ -249,40 +280,69 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 - (BOOL)isPlaying { std::lock_guard<std::mutex> lock(_state->mutex); return _state->playing; }
 
 - (BOOL)initializeWithDelegate:(id<RTCAudioDeviceDelegate>)delegate {
-    std::lock_guard<std::mutex> lock(_state->mutex);
-    if (_state->initialized) { return YES; }
-    _state->delegate = delegate;
-    _state->shutdown = false;
-    _state->interrupted = false;
-    ++_state->interruptionGeneration;
-    _state->lastNanoseconds = 0;
-    _state->resetTimeline();
-    try {
-        _state->deliveryThread = std::thread(DeliverAudio, _state.get());
-    } catch (...) {
-        _state->delegate = nil;
-        return NO;
+    auto state = _state;
+    __attribute__((objc_precise_lifetime)) id<RTCAudioDeviceDelegate> previous;
+    __attribute__((objc_precise_lifetime)) id<RTCAudioDeviceDelegate> failed;
+    bool initialized = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->initialized) { return YES; }
+        if (state->terminating || state->deliveryInFlight) { return NO; }
+        previous = state->delegate;
+        state->delegate = delegate;
+        state->shutdown = false;
+        state->interrupted = false;
+        ++state->interruptionGeneration;
+        state->lastNanoseconds = 0;
+        state->resetTimeline();
+        try {
+            state->deliveryThread = std::thread(DeliverAudio, state, ++state->lifecycleGeneration);
+            state->initialized = true;
+            initialized = true;
+        } catch (...) {
+            failed = state->delegate;
+            state->delegate = nil;
+        }
     }
-    _state->initialized = true;
-    return YES;
+    previous = nil;
+    failed = nil;
+    return initialized;
 }
 
 - (BOOL)terminateDevice {
+    auto state = _state;
+    std::thread deliveryThread;
+    __attribute__((objc_precise_lifetime)) id<RTCAudioDeviceDelegate> delegate;
+    uint64_t generation;
     {
-        std::lock_guard<std::mutex> lock(_state->mutex);
-        _state->recording = false;
-        _state->playing = false;
-        _state->shutdown = true;
-        ++_state->interruptionGeneration;
-        _state->resetTimeline();
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (!state->initialized && state->shutdown) { return YES; }
+        state->terminating = true;
+        state->initialized = false;
+        state->recordingInitialized = false;
+        state->playoutInitialized = false;
+        state->recording = false;
+        state->playing = false;
+        state->shutdown = true;
+        generation = ++state->lifecycleGeneration;
+        ++state->interruptionGeneration;
+        state->resetTimeline();
+        delegate = state->delegate;
+        state->delegate = nil;
+        if (state->deliveryThread.joinable() && state->deliveryThread.get_id() == std::this_thread::get_id()) {
+            // The pump's shared state survives a reentrant termination on its own thread.
+            state->deliveryThread.detach();
+        } else {
+            deliveryThread = std::move(state->deliveryThread);
+        }
     }
-    _state->wake.notify_all();
-    if (_state->deliveryThread.joinable()) { _state->deliveryThread.join(); }
-    std::lock_guard<std::mutex> lock(_state->mutex);
-    _state->delegate = nil;
-    _state->initialized = false;
-    _state->recordingInitialized = false;
-    _state->playoutInitialized = false;
+    state->wake.notify_all();
+    if (deliveryThread.joinable()) { deliveryThread.join(); }
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->lifecycleGeneration == generation) { state->terminating = false; }
+    }
+    delegate = nil;
     return YES;
 }
 
@@ -304,9 +364,10 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 
 - (BOOL)stopRecording {
     {
-        std::lock_guard<std::mutex> lock(_state->mutex);
+        std::unique_lock<std::mutex> lock(_state->mutex);
         _state->recording = false;
         _state->resetTimeline();
+        WaitForDelivery(_state.get(), lock);
     }
     _state->wake.notify_all();
     return YES;
@@ -376,8 +437,9 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 
 - (void)reset {
     {
-        std::lock_guard<std::mutex> lock(_state->mutex);
+        std::unique_lock<std::mutex> lock(_state->mutex);
         _state->resetTimeline();
+        WaitForDelivery(_state.get(), lock);
     }
     _state->wake.notify_all();
 }
@@ -390,34 +452,50 @@ bool ConvertPCM(CMSampleBufferRef sample, std::vector<int16_t> &converted, int64
 - (void)interruptAudioAndResume:(BOOL)resume {
     id<RTCAudioDeviceDelegate> delegate;
     uint64_t generation;
+    bool deferNotification;
     {
-        std::lock_guard<std::mutex> lock(_state->mutex);
+        std::unique_lock<std::mutex> lock(_state->mutex);
         generation = ++_state->interruptionGeneration;
         _state->interrupted = true;
         _state->resetTimeline();
+        deferNotification = _state->deliveryInFlight && _state->callbackThread == std::this_thread::get_id();
+        if (!deferNotification) { WaitForDelivery(_state.get(), lock); }
         delegate = _state->delegate;
     }
     _state->wake.notify_all();
     if (delegate) {
         __weak AppAudioDevice *weakSelf = self;
-        [delegate dispatchAsync:^{
-            AppAudioDevice *device = weakSelf;
-            if (!device) { return; }
-            {
-                std::lock_guard<std::mutex> lock(device->_state->mutex);
-                if (!device->_state->initialized || device->_state->interruptionGeneration != generation ||
-                    device->_state->delegate != delegate) { return; }
-            }
-            [delegate notifyAudioInputInterrupted];
-            if (resume) {
+        dispatch_block_t notification = ^{
+            [delegate dispatchAsync:^{
+                AppAudioDevice *device = weakSelf;
+                if (!device) { return; }
                 {
                     std::lock_guard<std::mutex> lock(device->_state->mutex);
-                    if (device->_state->interruptionGeneration != generation || device->_state->delegate != delegate) { return; }
-                    device->_state->interrupted = false;
+                    if (!device->_state->initialized || device->_state->interruptionGeneration != generation ||
+                        device->_state->delegate != delegate) { return; }
                 }
-                device->_state->wake.notify_all();
+                [delegate notifyAudioInputInterrupted];
+                if (resume) {
+                    {
+                        std::lock_guard<std::mutex> lock(device->_state->mutex);
+                        if (device->_state->interruptionGeneration != generation || device->_state->delegate != delegate) { return; }
+                        device->_state->interrupted = false;
+                    }
+                    device->_state->wake.notify_all();
+                }
+            }];
+        };
+        if (deferNotification) {
+            __attribute__((objc_precise_lifetime)) dispatch_block_t previous;
+            {
+                std::lock_guard<std::mutex> lock(_state->mutex);
+                previous = _state->afterDelivery;
+                _state->afterDelivery = notification;
             }
-        }];
+            previous = nil;
+        } else {
+            notification();
+        }
     } else if (resume) {
         std::lock_guard<std::mutex> lock(_state->mutex);
         if (_state->interruptionGeneration == generation) { _state->interrupted = false; }

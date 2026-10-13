@@ -126,6 +126,39 @@ final class AppAudioDeviceTests: XCTestCase {
         wait(for: [delivered], timeout: 2)
     }
 
+    func testCallbackCanReadStateAndStopRecordingReentrantly() throws {
+        let delivered = expectation(description: "reentrant state query and stop complete")
+        let device = self.device!
+        audioDelegate.onPacket = { [weak device] packet in
+            guard packet.index == 0, let device else { return }
+            XCTAssertTrue(device.isRecording)
+            XCTAssertTrue(device.isInitialized)
+            XCTAssertTrue(device.stopRecording())
+            XCTAssertFalse(device.isRecording)
+            delivered.fulfill()
+        }
+        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        wait(for: [delivered], timeout: 2)
+        XCTAssertFalse(device.isRecording)
+        XCTAssertEqual(audioDelegate.packets.count, 1)
+    }
+
+    func testCallbackCanTerminateDeviceWithoutJoiningItself() throws {
+        let delivered = expectation(description: "reentrant termination completes")
+        let device = self.device!
+        audioDelegate.onPacket = { [weak device] packet in
+            guard packet.index == 0, let device else { return }
+            XCTAssertTrue(device.terminateDevice())
+            XCTAssertFalse(device.isInitialized)
+            XCTAssertFalse(device.isRecording)
+            delivered.fulfill()
+        }
+        XCTAssertTrue(device.push(sampleBuffer: try makeSample(Array(repeating: 0.25, count: 960))))
+        wait(for: [delivered], timeout: 2)
+        XCTAssertFalse(device.isInitialized)
+        XCTAssertEqual(audioDelegate.packets.count, 1)
+    }
+
     private func postInterruption(_ type: AVAudioSession.InterruptionType) {
         NotificationCenter.default.post(
             name: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(),

@@ -25,6 +25,8 @@ jobs:
         run: python3 scripts/check-source.py
       - name: Check shell syntax
         run: bash -n scripts/check-native.sh
+      - name: Test CI deadlines and result validation
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Check workflow syntax
         # actionlint 1.7.12 predates GitHub's documented Xcode 27 preview runner label.
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -ignore 'label "xcode-27" is unknown' .github/workflows/ci.yml .github/workflows/deploy-signaling.yml
@@ -82,7 +84,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.platform }}-test-results
-          path: .build/native-test-results.*/*.xcresult
+          path: .build/native-test-results.*/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14

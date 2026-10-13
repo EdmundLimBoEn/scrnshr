@@ -38,6 +38,19 @@ if $check_phone; then
 fi
 
 mkdir -p .build
+run_native_tests() {
+  local result_bundle="$1" minimum_tests="$2"
+  shift 2
+  if python3 scripts/run-bounded.py 600 "$@"; then
+    python3 scripts/summarize-xcresult.py "$result_bundle" --minimum-tests "$minimum_tests"
+  else
+    local test_status=$?
+    if [[ -d "$result_bundle" ]]; then
+      python3 scripts/summarize-xcresult.py "$result_bundle" --minimum-tests "$minimum_tests" || true
+    fi
+    return "$test_status"
+  fi
+}
 package_dir="$repo_dir/.build/SourcePackages"
 derived_dir="$repo_dir/.build/DerivedData"
 resolve_scheme=ScrnshrMac
@@ -72,7 +85,7 @@ done
 results_dir="$(mktemp -d "$repo_dir/.build/native-test-results.XXXXXX")"
 if $check_mac; then
   echo "Running Mac unit tests. Results: $results_dir/Mac.xcresult"
-  xcodebuild -quiet "${common[@]}" -scheme ScrnshrMac -configuration Debug \
+  run_native_tests "$results_dir/Mac.xcresult" 24 xcodebuild "${common[@]}" -scheme ScrnshrMac -configuration Debug \
     -destination 'platform=macOS' -enableCodeCoverage YES \
     -resultBundlePath "$results_dir/Mac.xcresult" test
 fi
@@ -90,8 +103,11 @@ for runtime in sorted(devices, reverse=True):
 sys.exit("No available iOS 27 iPhone simulator. Install an iOS 27 runtime in Xcode Settings > Components.")
 ')"
   echo "Running iPhone app-audio tests on simulator $simulator_id."
-  xcodebuild -quiet "${common[@]}" -scheme ScrnshrPhone -configuration Debug \
-    -destination "platform=iOS Simulator,id=$simulator_id" -enableCodeCoverage YES \
+  # Xcode 27.1 documents slow first boot. Prove readiness before launching tests.
+  python3 scripts/run-bounded.py 600 xcrun simctl bootstatus "$simulator_id" -b
+  run_native_tests "$results_dir/iPhone.xcresult" 9 xcodebuild "${common[@]}" -scheme ScrnshrPhone -configuration Debug \
+    -destination "platform=iOS Simulator,id=$simulator_id" -destination-timeout 60 \
+    -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -enableCodeCoverage YES \
     -resultBundlePath "$results_dir/iPhone.xcresult" test
 fi
 echo "Requested native builds and unit tests passed. Signing, iPhone capture, sound, and HDMI still require device checks."
