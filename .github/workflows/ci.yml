@@ -70,13 +70,13 @@ jobs:
       matrix:
         platform: [phone, mac]
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
     steps:
       - uses: actions/checkout@v5
       - uses: actions/cache@v4
         with:
           path: .build/SourcePackages
-          key: native-spm-${{ runner.os }}-${{ runner.arch }}-xcode27.1-${{ hashFiles('Scrnshr.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: native-spm-${{ runner.os }}-${{ runner.arch }}-xcode27.0-${{ hashFiles('Scrnshr.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       - name: Build selected platform and run tests
         run: bash scripts/check-native.sh --${{ matrix.platform }}
       - name: Upload XCTest results

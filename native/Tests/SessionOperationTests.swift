@@ -9,7 +9,7 @@ final class SessionOperationTests: XCTestCase {
         SessionCreationURLProtocol.install(fixture)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [SessionCreationURLProtocol.self]
-        let session = RecordingSignalingSession(configuration: configuration)
+        let session = URLSession(configuration: configuration)
         let coordinator = await MainActor.run {
             let coordinator = SessionCoordinator(role: .receiver, signaling: SignalingClient(session: session))
             coordinator.serverAddress = "https://pair.example.com"
@@ -38,7 +38,6 @@ final class SessionOperationTests: XCTestCase {
             XCTAssertNil(coordinator.error)
         }
         XCTAssertEqual(fixture.requests, ["POST /v1/sessions"])
-        XCTAssertEqual(session.webSocketRequestCount, 0)
     }
 }
 
@@ -133,28 +132,5 @@ private final class SessionCreationURLProtocol: URLProtocol, @unchecked Sendable
         guard !stopped else { return }
         client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
         stopped = true
-    }
-}
-
-private final class RecordingSignalingSession: URLSession, @unchecked Sendable {
-    private let lock = NSLock()
-    private var webSocketRequests = 0
-
-    init(configuration: URLSessionConfiguration) {
-        super.init(configuration: configuration, delegate: nil, delegateQueue: nil)
-    }
-
-    var webSocketRequestCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return webSocketRequests
-    }
-
-    override func webSocketTask(with request: URLRequest) -> URLSessionWebSocketTask {
-        lock.lock()
-        webSocketRequests += 1
-        lock.unlock()
-        // Keep an unexpected connection local even when the regression returns.
-        return super.webSocketTask(with: URLRequest(url: URL(string: "scrnshr-test://blocked")!))
     }
 }

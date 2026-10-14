@@ -11,7 +11,9 @@ The source implements the iPhone sender, native Mac receiver, direct LAN validat
 
 If provisioning rejects `com.apple.developer.screen-recording`, record the actual signing error. The unsigned CI build does not verify entitlement provisioning.
 
-The Xcode 27.1 CI SDK does not include ScreenCaptureKit for iOS Simulator. The simulator app explicitly reports that screen sharing requires a physical iPhone; its UI, WebRTC, and audio-adapter tests still compile and run. The device build separately compiles the real capture implementation. A native loopback test negotiates two WebRTC peers, encodes and decodes a synthetic video marker, handles offer retries, and verifies sharing/stop messages over the data channel. It uses custom audio devices and does not verify speakers or real captured sound.
+CI uses stable Xcode 27.0. When ScreenCaptureKit is unavailable in the iOS Simulator SDK, the simulator app explicitly reports that screen sharing requires a physical iPhone; its UI, WebRTC, and audio-adapter tests still compile and run. The device build separately compiles the real capture implementation. A native loopback test negotiates two WebRTC peers, encodes and decodes a synthetic video marker, handles offer retries, and verifies sharing/stop messages over the data channel. It uses custom audio devices and does not verify speakers or real captured sound.
+
+The native check script uses `-collect-test-diagnostics never` because CI's verbose system diagnostic collector hung after all tests passed. Normal XCTest results, coverage, runtime warnings, and strict pass/failure/skip counts remain enabled, including Thread Performance Checker. Apple documents this [diagnostic collection option](https://developer.apple.com/forums/thread/698054).
 
 ## Prove capture and direct LAN HDMI
 
