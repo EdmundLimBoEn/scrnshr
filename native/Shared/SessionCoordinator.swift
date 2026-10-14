@@ -55,6 +55,7 @@ final class SessionCoordinator: ObservableObject {
     @Published var isBusy = false
 
     private let signaling: SignalingClient
+    private let credentialNamespace: String
     private var code: PairingCode?
     private var token: String?
     private var expiresAt: Date?
@@ -72,9 +73,13 @@ final class SessionCoordinator: ObservableObject {
 
     var hasSession: Bool { code != nil || approved || isSharing || !manualSignals.isEmpty }
 
-    init(role: PeerRole, signaling: SignalingClient? = nil) {
+    private var ownerCredentialAccount: String { credentialNamespace + "owner-token" }
+    private var sessionCredentialAccount: String { credentialNamespace + "session-\(role.rawValue)" }
+
+    init(role: PeerRole, signaling: SignalingClient? = nil, credentialNamespace: String = "") {
         self.role = role
         self.signaling = signaling ?? SignalingClient()
+        self.credentialNamespace = credentialNamespace
         serverAddress = UserDefaults.standard.string(forKey: "signaling-server") ?? ""
         #if os(iOS)
         let device = AppAudioDevice()
@@ -85,9 +90,9 @@ final class SessionCoordinator: ObservableObject {
         media = WebRTCSession(role: role)
         presentation = PresentationController()
         #endif
-        if let data = try? KeychainStore.load(account: "owner-token"),
+        if let data = try? KeychainStore.load(account: ownerCredentialAccount),
            let value = String(data: data, encoding: .utf8) { ownerToken = value }
-        if let data = try? KeychainStore.load(account: "session-\(role.rawValue)"),
+        if let data = try? KeychainStore.load(account: sessionCredentialAccount),
            let saved = try? JSONDecoder().decode(SavedSession.self, from: data) {
             canRestore = saved.expiresAt > .now
         }
@@ -138,7 +143,7 @@ final class SessionCoordinator: ObservableObject {
             authenticator = try SignalAuthenticator(sessionId: pairing.sessionId, pairingKey: pairing.pairingKey, role: role)
             pairingURL = try pairing.url.absoluteString
             UserDefaults.standard.set(server.absoluteString, forKey: "signaling-server")
-            try KeychainStore.save(Data(ownerToken.utf8), account: "owner-token")
+            try KeychainStore.save(Data(ownerToken.utf8), account: ownerCredentialAccount)
             try saveSession()
             let ice = try await signaling.iceConfiguration(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
             guard operationGeneration == sessionGeneration else { return }
@@ -183,10 +188,13 @@ final class SessionCoordinator: ObservableObject {
         isBusy = true
         defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
-            guard let data = try KeychainStore.load(account: "session-\(role.rawValue)") else { throw PairingError.expired }
+            guard let data = try KeychainStore.load(account: sessionCredentialAccount) else { throw PairingError.expired }
             let saved = try JSONDecoder().decode(SavedSession.self, from: data)
             guard saved.expiresAt > .now else { throw PairingError.expired }
             _ = try PairingCode.validateServer(saved.code.server)
+            #if os(macOS)
+            presentation.blackout()
+            #endif
             operationGeneration = await reset(preserveBusy: true)
             guard operationGeneration == sessionGeneration else { return }
             mode = .internet
@@ -256,7 +264,7 @@ final class SessionCoordinator: ObservableObject {
         guard operationGeneration == sessionGeneration else { return }
         operationGeneration = await reset(preserveBusy: true)
         guard operationGeneration == sessionGeneration else { return }
-        KeychainStore.delete(account: "session-\(role.rawValue)")
+        KeychainStore.delete(account: sessionCredentialAccount)
         canRestore = false
         status = "Sharing stopped"
         #if os(macOS)
@@ -428,7 +436,7 @@ final class SessionCoordinator: ObservableObject {
                 media.sendCaptureStatus(.stopped)
                 let resetGeneration = await reset()
                 guard resetGeneration == sessionGeneration else { return }
-                KeychainStore.delete(account: "session-\(role.rawValue)")
+                KeychainStore.delete(account: sessionCredentialAccount)
                 canRestore = false
                 status = message.type == "rejected" ? "The Mac declined this phone." : "Session ended"
             case "error": error = message.message ?? "The signaling server could not complete the request."
@@ -454,7 +462,7 @@ final class SessionCoordinator: ObservableObject {
         guard let code, let token, let expiresAt else { return }
         let saved = SavedSession(code: code, token: token, expiresAt: expiresAt,
                                  authentication: authenticator?.checkpoint)
-        try KeychainStore.save(JSONEncoder().encode(saved), account: "session-\(role.rawValue)")
+        try KeychainStore.save(JSONEncoder().encode(saved), account: sessionCredentialAccount)
         canRestore = expiresAt > .now
     }
 

@@ -11,7 +11,7 @@ The source implements the iPhone sender, native Mac receiver, direct LAN validat
 
 If provisioning rejects `com.apple.developer.screen-recording`, record the actual signing error. The unsigned CI build does not verify entitlement provisioning.
 
-CI uses stable Xcode 27.0. When ScreenCaptureKit is unavailable in the iOS Simulator SDK, the simulator app explicitly reports that screen sharing requires a physical iPhone; its UI, WebRTC, and audio-adapter tests still compile and run. The device build separately compiles the real capture implementation. A native loopback test negotiates two WebRTC peers, encodes and decodes a synthetic video marker, handles offer retries, and verifies sharing/stop messages over the data channel. It uses custom audio devices and does not verify speakers or real captured sound.
+CI uses stable Xcode 27.0. When ScreenCaptureKit is unavailable in the iOS Simulator SDK, the simulator app explicitly reports that screen sharing requires a physical iPhone; its UI, WebRTC, and audio-adapter tests still compile and run. The device build separately compiles the real capture implementation. Native loopback tests negotiate two WebRTC peers, encode and decode a synthetic video marker, handle offer retries, and verify sharing/stop messages over the data channel. They also inject one static frame before negotiation, require it to decode without another capture sample, and verify that stopping capture clears it before a later resume. They use custom audio devices and do not verify speakers or real captured sound.
 
 The native check script uses `-collect-test-diagnostics never` because CI's verbose system diagnostic collector hung after all tests passed. Normal XCTest results, coverage, runtime warnings, and strict pass/failure/skip counts remain enabled, including Thread Performance Checker. Apple documents this [diagnostic collection option](https://developer.apple.com/forums/thread/698054).
 
@@ -21,6 +21,7 @@ Keep the devices on the same reachable Wi-Fi for this first gate. No Worker, TUR
 
 1. In both apps choose Direct LAN and New direct session. On the phone tap Share screen and approve full-display capture in Apple's picker.
 2. Wait for the phone's outgoing connection bundle, then copy/share it to the Mac and Import bundle. Copy the Mac's outgoing bundle back to the phone and import it. Repeat with the updated bundles if more ICE candidates arrived. Already imported entries are ignored.
+   Keep a static phone screen visible while pairing. Confirm its first picture appears after connection without touching or scrolling the phone.
 3. Switch to Home, Safari, the keyboard, and your actual demo app. Confirm the entire phone picture, app sounds, and continued sharing outside scrnshr. Speak near the phone and verify speech does not appear in the received sound.
 4. Use an extended HDMI desktop. Move the phone presentation window onto the display and fullscreen it. Keep the controls on the Mac. Verify the four edges of the Calibration screen and small text, resize the window, then rotate repeatedly. No cropping, stretch, double rotation, or mirroring should occur.
 5. Select the Mac's speakers in macOS Sound, then select the HDMI output if it has audio. Check sound in both cases, silence, mute/unmute, and sound-output changes while streaming. If the pinned WebRTC output requires restarting the connection after an output change, record that limitation.
@@ -42,7 +43,7 @@ Test phone cellular to Mac Wi-Fi, then create a session with relay-only enabled.
 - Stop sharing through iOS. The Mac must replace its last picture with a stopped state. Restarting capture requires Apple's picker approval again.
 - Interrupt signaling alone while WebRTC remains healthy. The current picture must continue. Interrupt media transport separately; the presentation must show reconnecting and replace stale video.
 - Leave a static screen visible for more than eight seconds. It must remain visible while capture heartbeats are healthy.
-- Restart the receiver and use Reconnect saved session on each device. Confirm expired or rejected sessions cannot reconnect.
+- Restart the receiver and use Reconnect saved session on each device. The Mac restores transport with the picture blacked out and audio muted; press Resume explicitly to present again. Confirm expired or rejected sessions cannot reconnect.
 - Test Wi-Fi/cellular changes, phone lock/unlock, and an incoming call. Record which interruptions require new sharing approval.
 - Unplug/replug HDMI while playing and while blacked out. After display loss is detected the app blackouts and mutes until Resume. macOS may move the window or change audio output before its notification; test that ordering rather than assuming zero leakage.
 - Run the actual demo for 30 minutes. Record frame rate during movement, local latency, audio drift, recovery times, and Mac/iPhone heat or battery behavior.

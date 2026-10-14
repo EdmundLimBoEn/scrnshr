@@ -118,6 +118,86 @@ final class PeerConnectionTests: XCTestCase {
     }
 
     @MainActor
+    func testOneFrameBeforeNegotiationIsDeliveredAndCannotReplayAfterCaptureStops() async throws {
+        let senderAudio = AppAudioDevice()
+        let receiverAudio = AppAudioDevice()
+        let sender = WebRTCSession(role: .sender, audioDevice: senderAudio)
+        let receiver = WebRTCSession(role: .receiver, audioDevice: receiverAudio)
+        let renderer = DecodedFrameRecorder()
+        let deadline = ProcessInfo.processInfo.systemUptime + 22
+        var remoteStatus: CaptureStatus = .ready
+        var failures: [String] = []
+
+        defer {
+            receiver.remoteVideoTrack?.remove(renderer)
+            sender.onSignal = nil
+            receiver.onSignal = nil
+            sender.onError = nil
+            receiver.onError = nil
+            sender.close()
+            receiver.close()
+            XCTAssertTrue(senderAudio.terminateDevice())
+            XCTAssertTrue(receiverAudio.terminateDevice())
+        }
+        sender.onError = { message in failures.append(message); XCTFail("Sender: \(message)") }
+        receiver.onError = { message in failures.append(message); XCTFail("Receiver: \(message)") }
+        sender.onSignal = { [weak receiver] signal in receiver?.accept(signal) }
+        receiver.onSignal = { [weak sender] signal in sender?.accept(signal) }
+        receiver.onVideoTrack = { track in track.add(renderer) }
+        receiver.onCaptureStatus = { remoteStatus = $0 }
+        receiver.setRemoteAudioMuted(true)
+        receiver.configure(iceServers: [])
+        sender.configure(iceServers: [])
+        sender.sendCaptureStatus(.sharing)
+
+        // ScreenCaptureKit can remain idle after its first static picture.
+        sender.sendVideo(try Self.makeVideoSample())
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(renderer.snapshot)
+        sender.startOffer()
+        let delivered = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 10)) {
+            !failures.isEmpty || (
+                sender.connectionState == .connected && receiver.connectionState == .connected &&
+                remoteStatus == .sharing && renderer.snapshot != nil
+            )
+        }
+        XCTAssertTrue(delivered, "A static frame captured before negotiation must decode without another capture sample.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+        XCTAssertEqual(sender.connectionState, .connected)
+        XCTAssertEqual(receiver.connectionState, .connected)
+        let decoded = try XCTUnwrap(renderer.snapshot)
+        XCTAssertEqual(decoded.width, 160)
+        XCTAssertEqual(decoded.height, 120)
+        XCTAssertGreaterThan(decoded.lumaContrast, 100)
+
+        sender.sendCaptureStatus(.stopped)
+        let stopped = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 2)) {
+            remoteStatus == .stopped || !failures.isEmpty
+        }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(remoteStatus, .stopped)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        renderer.reset()
+        let replayedWhileStopped = await waitUntil(deadline: ProcessInfo.processInfo.systemUptime + 3) {
+            renderer.snapshot != nil || !failures.isEmpty
+        }
+        XCTAssertFalse(replayedWhileStopped, "The heartbeat must not refresh video after sharing stops.")
+
+        // Reauthorizing the track alone must not resurrect a previous capture's picture.
+        sender.sendCaptureStatus(.sharing)
+        let resumed = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 2)) {
+            remoteStatus == .sharing || !failures.isEmpty
+        }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(remoteStatus, .sharing)
+        let replayedAfterResume = await waitUntil(deadline: ProcessInfo.processInfo.systemUptime + 3) {
+            renderer.snapshot != nil || !failures.isEmpty
+        }
+        XCTAssertFalse(replayedAfterResume, "Resumed sharing must wait for a new capture sample after the cached picture was cleared.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+    }
+
+    @MainActor
     private func waitUntil(deadline: TimeInterval, condition: () -> Bool) async -> Bool {
         while ProcessInfo.processInfo.systemUptime < deadline {
             if condition() { return true }
@@ -188,6 +268,12 @@ private final class DecodedFrameRecorder: NSObject, RTCVideoRenderer {
         lock.lock()
         defer { lock.unlock() }
         return recorded
+    }
+
+    func reset() {
+        lock.lock()
+        recorded = nil
+        lock.unlock()
     }
 
     func setSize(_ size: CGSize) {}

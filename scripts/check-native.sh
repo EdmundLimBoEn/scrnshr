@@ -85,7 +85,7 @@ done
 results_dir="$(mktemp -d "$repo_dir/.build/native-test-results.XXXXXX")"
 if $check_mac; then
   echo "Running Mac unit tests. Results: $results_dir/Mac.xcresult"
-  run_native_tests "$results_dir/Mac.xcresult" 27 xcodebuild "${common[@]}" -scheme ScrnshrMac -configuration Debug \
+  run_native_tests "$results_dir/Mac.xcresult" 28 xcodebuild "${common[@]}" -scheme ScrnshrMac -configuration Debug \
     -destination 'platform=macOS' -enableCodeCoverage YES -collect-test-diagnostics never \
     -resultBundlePath "$results_dir/Mac.xcresult" test
 fi
@@ -105,7 +105,7 @@ sys.exit("No available iOS 27 iPhone simulator. Install an iOS 27 runtime in Xco
   echo "Running iPhone app-audio tests on simulator $simulator_id."
   # Xcode 27.1 documents slow first boot. Prove readiness before launching tests.
   python3 scripts/run-bounded.py 600 xcrun simctl bootstatus "$simulator_id" -b
-  run_native_tests "$results_dir/iPhone.xcresult" 10 xcodebuild "${common[@]}" -scheme ScrnshrPhone -configuration Debug \
+  run_native_tests "$results_dir/iPhone.xcresult" 11 xcodebuild "${common[@]}" -scheme ScrnshrPhone -configuration Debug \
     -destination "platform=iOS Simulator,id=$simulator_id" -destination-timeout 60 \
     -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -enableCodeCoverage YES -collect-test-diagnostics never \
     -resultBundlePath "$results_dir/iPhone.xcresult" test

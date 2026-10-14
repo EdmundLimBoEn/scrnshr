@@ -11,7 +11,10 @@ final class SessionOperationTests: XCTestCase {
         configuration.protocolClasses = [SessionCreationURLProtocol.self]
         let session = URLSession(configuration: configuration)
         let coordinator = await MainActor.run {
-            let coordinator = SessionCoordinator(role: .receiver, signaling: SignalingClient(session: session))
+            let coordinator = SessionCoordinator(
+                role: .receiver, signaling: SignalingClient(session: session),
+                credentialNamespace: "test-\(UUID())."
+            )
             coordinator.serverAddress = "https://pair.example.com"
             coordinator.ownerToken = "test-owner-credential"
             return coordinator

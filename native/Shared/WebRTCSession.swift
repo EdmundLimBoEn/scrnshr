@@ -537,12 +537,14 @@ public final class WebRTCSession: NSObject, ObservableObject {
             captureHeartbeat = CaptureHeartbeatWatchdog(startedAt: ProcessInfo.processInfo.systemUptime)
         }
         publishCaptureStatus()
+        refreshStaticPicture(force: true)
         captureStatusTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard let self, !Task.isCancelled, self.peer != nil else { return }
                 if self.role == .sender {
                     self.publishCaptureStatus()
+                    self.refreshStaticPicture()
                 } else if !self.captureHeartbeatExpired,
                           self.captureHeartbeat?.isExpired(at: ProcessInfo.processInfo.systemUptime) == true {
                     // A static picture is healthy as long as capture status still arrives.
@@ -589,6 +591,7 @@ public final class WebRTCSession: NSObject, ObservableObject {
             recoveryExhausted = false
             setState(.connected)
             publishCaptureStatus()
+            refreshStaticPicture(force: true)
         } else if state == .reconnecting || state == .failed {
             let sharing = role == .sender ? localCaptureStatus == .sharing : remoteCaptureStatus == .sharing
             guard sharing && hasNegotiated else {
@@ -630,6 +633,11 @@ public final class WebRTCSession: NSObject, ObservableObject {
         guard connectionState != state else { return }
         connectionState = state
         onConnectionState?(state)
+    }
+
+    private func refreshStaticPicture(force: Bool = false) {
+        guard role == .sender, connectionState == .connected, localCaptureStatus == .sharing else { return }
+        videoInput.refresh(force: force)
     }
 
     private func fail(_ message: String) {
@@ -788,6 +796,9 @@ private final class ScreenVideoInput: @unchecked Sendable {
     private var source: RTCVideoSource?
     private var capturer: RTCVideoCapturer?
     private var latest: CMSampleBuffer?
+    private var cachedFrame: RTCVideoFrame?
+    private var lastCapturedHostTime: TimeInterval?
+    private var refreshRequested = false
     private var enabled = false
     private var draining = false
     private var generation: UInt64 = 0
@@ -803,6 +814,9 @@ private final class ScreenVideoInput: @unchecked Sendable {
         self.enabled = enabled
         generation &+= 1
         latest = nil
+        cachedFrame = nil
+        lastCapturedHostTime = nil
+        refreshRequested = false
         lock.unlock()
     }
 
@@ -811,6 +825,9 @@ private final class ScreenVideoInput: @unchecked Sendable {
         if self.enabled != enabled {
             generation &+= 1
             latest = nil
+            cachedFrame = nil
+            lastCapturedHostTime = nil
+            refreshRequested = false
         }
         self.enabled = enabled
         if !enabled { latest = nil }
@@ -823,6 +840,9 @@ private final class ScreenVideoInput: @unchecked Sendable {
         source = nil
         capturer = nil
         latest = nil
+        cachedFrame = nil
+        lastCapturedHostTime = nil
+        refreshRequested = false
         generation &+= 1
         lock.unlock()
     }
@@ -837,15 +857,33 @@ private final class ScreenVideoInput: @unchecked Sendable {
         if shouldStart { queue.async { [weak self] in self?.drain() } }
     }
 
+    func refresh(force: Bool) {
+        lock.lock()
+        guard enabled, source != nil, cachedFrame != nil else { lock.unlock(); return }
+        guard force || lastCapturedHostTime.map({ ProcessInfo.processInfo.systemUptime - $0 >= 1 }) == true else {
+            lock.unlock()
+            return
+        }
+        refreshRequested = true
+        let shouldStart = !draining
+        draining = true
+        lock.unlock()
+        if shouldStart { queue.async { [weak self] in self?.drain() } }
+    }
+
     private func drain() {
         while true {
             lock.lock()
-            guard enabled, let sample = latest, let source, let capturer else {
+            guard enabled, let source, let capturer,
+                  latest != nil || (refreshRequested && cachedFrame != nil) else {
                 draining = false
                 lock.unlock()
                 return
             }
+            let sample = latest
+            let refreshFrame = refreshRequested ? cachedFrame : nil
             latest = nil
+            refreshRequested = false
             let currentGeneration = generation
             lock.unlock()
             if activeGeneration != currentGeneration {
@@ -854,6 +892,16 @@ private final class ScreenVideoInput: @unchecked Sendable {
                 lastWidth = 0
                 lastHeight = 0
             }
+            if sample == nil, let refreshFrame {
+                guard let timestamp = frameClock.refreshTimestamp(hostTime: CMClockGetTime(CMClockGetHostTimeClock())) else { continue }
+                let frame = RTCVideoFrame(buffer: refreshFrame.buffer, rotation: refreshFrame.rotation, timeStampNs: timestamp)
+                lock.lock()
+                let stillCurrent = enabled && generation == currentGeneration
+                lock.unlock()
+                if stillCurrent { source.capturer(capturer, didCapture: frame) }
+                continue
+            }
+            guard let sample else { continue }
             guard CMSampleBufferIsValid(sample), let capturedBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
             guard let timestamp = frameClock.accept(
@@ -886,6 +934,11 @@ private final class ScreenVideoInput: @unchecked Sendable {
             let frame = RTCVideoFrame(buffer: RTCCVPixelBuffer(pixelBuffer: pixelBuffer), rotation: rotation, timeStampNs: timestamp)
             lock.lock()
             let stillCurrent = enabled && generation == currentGeneration
+            if stillCurrent {
+                cachedFrame = frame
+                lastCapturedHostTime = ProcessInfo.processInfo.systemUptime
+                refreshRequested = false
+            }
             lock.unlock()
             guard stillCurrent else { continue }
             source.capturer(capturer, didCapture: frame)
@@ -926,6 +979,19 @@ struct CaptureFrameClock {
     mutating func accept(presentationTime: CMTime, fallbackHostTime: CMTime) -> Int64? {
         guard let timestamp = Self.timestampNanoseconds(presentationTime: presentationTime, fallbackHostTime: fallbackHostTime),
               lastTimestampNs.map({ timestamp > $0 }) ?? true else { return nil }
+        lastTimestampNs = timestamp
+        return timestamp
+    }
+
+    mutating func refreshTimestamp(hostTime: CMTime) -> Int64? {
+        guard let hostTimestamp = Self.timestampNanoseconds(presentationTime: hostTime, fallbackHostTime: hostTime) else { return nil }
+        let timestamp: Int64
+        if let previous = lastTimestampNs {
+            guard previous < Int64.max else { return nil }
+            timestamp = max(hostTimestamp, previous + 1)
+        } else {
+            timestamp = hostTimestamp
+        }
         lastTimestampNs = timestamp
         return timestamp
     }

@@ -132,4 +132,16 @@ final class WebRTCModelsTests: XCTestCase {
         XCTAssertEqual(watchdog.lastReceivedAt, 104)
         XCTAssertTrue(watchdog.isExpired(at: 112))
     }
+
+    func testStaticRefreshUsesFreshMonotonicHostTimeWithoutChangingCapturedFrameTiming() {
+        var clock = CaptureFrameClock()
+        let captured = CMTime(value: 10, timescale: 1)
+        XCTAssertEqual(clock.accept(presentationTime: captured, fallbackHostTime: .invalid), 10_000_000_000)
+        XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 12, timescale: 1)), 12_000_000_000)
+        XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 11, timescale: 1)), 12_000_000_001)
+        XCTAssertEqual(clock.accept(presentationTime: CMTime(value: 13, timescale: 1), fallbackHostTime: .invalid), 13_000_000_000)
+        XCTAssertNil(clock.refreshTimestamp(hostTime: .invalid))
+        clock.reset()
+        XCTAssertEqual(clock.accept(presentationTime: captured, fallbackHostTime: .invalid), 10_000_000_000)
+    }
 }
