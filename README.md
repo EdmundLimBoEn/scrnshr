@@ -21,7 +21,7 @@ bun install --frozen-lockfile
 bun run check
 ```
 
-CI builds Debug and Release apps and runs Mac and iOS Simulator XCTest plus signaling integration tests in the real Cloudflare runtime. Deployment is manual and gated on device validation. Signing, full-display capture while backgrounded, HDMI, sound routing, and USB require Edmund's devices; source and CI checks do not prove those behaviors.
+CI builds Debug and Release apps and runs Mac and iOS Simulator XCTest, including native WebRTC video encoding/decoding and capture-status transport, plus signaling integration tests in the real Cloudflare runtime. It retains test results and an unsigned Mac build. Deployment is manual and gated on device validation. Signing, full-display capture while backgrounded, HDMI, sound routing, and USB require Edmund's devices; source and CI checks do not prove those behaviors.
 
 [Protocol](docs/protocol.md) · [Signaling setup](signaling/README.md) · [Planning handoff](docs/handoffs/2026-10-13-edserve.md)
 

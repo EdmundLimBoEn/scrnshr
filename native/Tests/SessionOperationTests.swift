@@ -140,6 +140,10 @@ private final class RecordingSignalingSession: URLSession, @unchecked Sendable {
     private let lock = NSLock()
     private var webSocketRequests = 0
 
+    init(configuration: URLSessionConfiguration) {
+        super.init(configuration: configuration, delegate: nil, delegateQueue: nil)
+    }
+
     var webSocketRequestCount: Int {
         lock.lock()
         defer { lock.unlock() }
