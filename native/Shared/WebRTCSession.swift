@@ -87,8 +87,9 @@ public final class WebRTCSession: NSObject, ObservableObject {
 
     private static func makeEncoder() -> RTCDefaultVideoEncoderFactory {
         let encoder = RTCDefaultVideoEncoderFactory()
-        if let h264 = encoder.supportedCodecs().first(where: { $0.name == "H264" }) {
-            encoder.preferredCodec = h264
+        // VideoToolbox buffered sparse frames until teardown in the single-frame regression.
+        if let vp8 = encoder.supportedCodecs().first(where: { $0.name == "VP8" }) {
+            encoder.preferredCodec = vp8
         }
         return encoder
     }
@@ -1025,28 +1026,36 @@ private final class ScreenVideoInput: @unchecked Sendable {
 }
 
 struct CaptureFrameClock {
-    private var lastTimestampNs: Int64?
+    private var lastCapturedTimestampNs: Int64?
+    private var lastOutputTimestampNs: Int64?
 
-    mutating func reset() { lastTimestampNs = nil }
+    mutating func reset() {
+        lastCapturedTimestampNs = nil
+        lastOutputTimestampNs = nil
+    }
 
     mutating func accept(presentationTime: CMTime, fallbackHostTime: CMTime) -> Int64? {
-        guard let timestamp = Self.timestampNanoseconds(presentationTime: presentationTime, fallbackHostTime: fallbackHostTime),
-              lastTimestampNs.map({ timestamp > $0 }) ?? true else { return nil }
-        lastTimestampNs = timestamp
-        return timestamp
+        guard let captured = Self.timestampNanoseconds(presentationTime: presentationTime, fallbackHostTime: fallbackHostTime),
+              lastCapturedTimestampNs.map({ captured > $0 }) ?? true,
+              let output = outputTimestamp(preferred: captured) else { return nil }
+        lastCapturedTimestampNs = captured
+        lastOutputTimestampNs = output
+        return output
     }
 
     mutating func refreshTimestamp(hostTime: CMTime) -> Int64? {
         guard let hostTimestamp = Self.timestampNanoseconds(presentationTime: hostTime, fallbackHostTime: hostTime) else { return nil }
-        let timestamp: Int64
-        if let previous = lastTimestampNs {
-            guard previous < Int64.max else { return nil }
-            timestamp = max(hostTimestamp, previous + 1)
-        } else {
-            timestamp = hostTimestamp
-        }
-        lastTimestampNs = timestamp
+        guard let timestamp = outputTimestamp(preferred: hostTimestamp) else { return nil }
+        lastOutputTimestampNs = timestamp
         return timestamp
+    }
+
+    private func outputTimestamp(preferred: Int64) -> Int64? {
+        guard let previous = lastOutputTimestampNs else { return preferred }
+        // Native encoding and RTP truncate below millisecond precision.
+        let minimumInterval: Int64 = 1_000_000
+        guard previous <= Int64.max - minimumInterval else { return nil }
+        return max(preferred, previous + minimumInterval)
     }
 
     static func timestampNanoseconds(presentationTime: CMTime, fallbackHostTime: CMTime) -> Int64? {

@@ -85,7 +85,7 @@ done
 results_dir="$(mktemp -d "$repo_dir/.build/native-test-results.XXXXXX")"
 if $check_mac; then
   echo "Running Mac unit tests. Results: $results_dir/Mac.xcresult"
-  run_native_tests "$results_dir/Mac.xcresult" 28 xcodebuild "${common[@]}" -scheme ScrnshrMac -configuration Debug \
+  run_native_tests "$results_dir/Mac.xcresult" 29 xcodebuild "${common[@]}" -scheme ScrnshrMac -configuration Debug \
     -destination 'platform=macOS' -enableCodeCoverage YES -collect-test-diagnostics never \
     -resultBundlePath "$results_dir/Mac.xcresult" test
 fi

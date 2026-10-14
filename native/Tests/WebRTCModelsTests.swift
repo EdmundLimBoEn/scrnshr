@@ -138,10 +138,23 @@ final class WebRTCModelsTests: XCTestCase {
         let captured = CMTime(value: 10, timescale: 1)
         XCTAssertEqual(clock.accept(presentationTime: captured, fallbackHostTime: .invalid), 10_000_000_000)
         XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 12, timescale: 1)), 12_000_000_000)
-        XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 11, timescale: 1)), 12_000_000_001)
+        XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 11, timescale: 1)), 12_001_000_000)
         XCTAssertEqual(clock.accept(presentationTime: CMTime(value: 13, timescale: 1), fallbackHostTime: .invalid), 13_000_000_000)
         XCTAssertNil(clock.refreshTimestamp(hostTime: .invalid))
         clock.reset()
         XCTAssertEqual(clock.accept(presentationTime: captured, fallbackHostTime: .invalid), 10_000_000_000)
+    }
+
+    func testRefreshCannotDiscardANewerRealCaptureWithAnEarlierPresentationTimestamp() {
+        var clock = CaptureFrameClock()
+        XCTAssertEqual(clock.accept(presentationTime: CMTime(value: 10, timescale: 1), fallbackHostTime: .invalid), 10_000_000_000)
+        XCTAssertEqual(clock.refreshTimestamp(hostTime: CMTime(value: 12, timescale: 1)), 12_000_000_000)
+        XCTAssertEqual(clock.accept(presentationTime: CMTime(value: 11, timescale: 1), fallbackHostTime: .invalid), 12_001_000_000)
+        XCTAssertNil(clock.accept(presentationTime: CMTime(value: 10_500, timescale: 1_000), fallbackHostTime: .invalid))
+        XCTAssertEqual(clock.accept(presentationTime: CMTime(value: 13, timescale: 1), fallbackHostTime: .invalid), 13_000_000_000)
+
+        clock.reset()
+        XCTAssertEqual(clock.accept(presentationTime: CMTime(value: Int64.max, timescale: 1_000_000_000), fallbackHostTime: .invalid), Int64.max)
+        XCTAssertNil(clock.refreshTimestamp(hostTime: CMTime(value: Int64.max, timescale: 1_000_000_000)))
     }
 }

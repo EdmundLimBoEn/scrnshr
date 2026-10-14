@@ -153,7 +153,9 @@ final class PeerConnectionTests: XCTestCase {
         sender.sendCaptureStatus(.sharing)
 
         // ScreenCaptureKit can remain idle after its first static picture.
-        sender.sendVideo(try Self.makeVideoSample())
+        let initialSample = try Self.makeVideoSample()
+        let initialPresentationTime = CMSampleBufferGetPresentationTimeStamp(initialSample)
+        sender.sendVideo(initialSample)
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertNil(renderer.snapshot)
         sender.startOffer()
@@ -178,6 +180,31 @@ final class PeerConnectionTests: XCTestCase {
         XCTAssertEqual(decoded.width, 160)
         XCTAssertEqual(decoded.height, 120)
         XCTAssertGreaterThan(decoded.lumaContrast, 100)
+
+        let senderStatistics = await sender.statisticsSummary()
+        let receiverStatistics = await receiver.statisticsSummary()
+        XCTAssertEqual(try Self.videoCodec(in: senderStatistics, direction: "outbound-rtp"), "video/VP8")
+        XCTAssertEqual(try Self.videoCodec(in: receiverStatistics, direction: "inbound-rtp"), "video/VP8")
+
+        let initialRefreshCount = try Self.captureRefreshCount(in: senderStatistics)
+        try await Task.sleep(nanoseconds: 2_200_000_000)
+        let idleStatistics = await sender.statisticsSummary()
+        XCTAssertGreaterThan(try Self.captureRefreshCount(in: idleStatistics), initialRefreshCount)
+        // A delayed capture can be newer than the last capture but older than a synthetic refresh.
+        let delayedPresentationTime = CMTimeAdd(initialPresentationTime, CMTime(value: 1, timescale: 10))
+        sender.sendVideo(try Self.makeVideoSample(reversed: true, presentationTime: delayedPresentationTime))
+        let updated = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 3)) {
+            renderer.snapshot.map({ $0.signedLumaContrast < -100 }) == true || !failures.isEmpty
+        }
+        var updateDiagnostic = ""
+        if !updated {
+            let updatedSenderStatistics = await sender.statisticsSummary()
+            let updatedReceiverStatistics = await receiver.statisticsSummary()
+            updateDiagnostic = "\nSender statistics:\n\(updatedSenderStatistics)\nReceiver statistics:\n\(updatedReceiverStatistics)"
+            print(updateDiagnostic)
+        }
+        XCTAssertTrue(updated, "One delayed changed picture after a heartbeat refresh must decode within three seconds without a frame pump.\(updateDiagnostic)")
+        XCTAssertLessThan(try XCTUnwrap(renderer.snapshot).signedLumaContrast, -100)
 
         sender.sendCaptureStatus(.stopped)
         let stopped = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 2)) {
@@ -216,7 +243,29 @@ final class PeerConnectionTests: XCTestCase {
         return condition()
     }
 
-    private static func makeVideoSample() throws -> CMSampleBuffer {
+    private static func videoCodec(in summary: String, direction: String) throws -> String {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(summary.utf8)) as? [String: Any])
+        let statistics = try XCTUnwrap(object["statistics"] as? [[String: Any]])
+        let video = try XCTUnwrap(statistics.first { entry in
+            let values = entry["values"] as? [String: Any]
+            return entry["type"] as? String == direction && values?["kind"] as? String == "video"
+        })
+        let videoValues = try XCTUnwrap(video["values"] as? [String: Any])
+        let codecId = try XCTUnwrap(videoValues["codecId"] as? String)
+        let codec = try XCTUnwrap(statistics.first {
+            $0["type"] as? String == "codec" && $0["id"] as? String == codecId
+        })
+        let codecValues = try XCTUnwrap(codec["values"] as? [String: Any])
+        return try XCTUnwrap(codecValues["mimeType"] as? String)
+    }
+
+    private static func captureRefreshCount(in summary: String) throws -> UInt64 {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(summary.utf8)) as? [String: Any])
+        let capture = try XCTUnwrap(object["capture"] as? [String: Any])
+        return try XCTUnwrap(capture["framesRefreshed"] as? NSNumber).uint64Value
+    }
+
+    private static func makeVideoSample(reversed: Bool = false, presentationTime: CMTime? = nil) throws -> CMSampleBuffer {
         let width = 160
         let height = 120
         let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:]]
@@ -234,7 +283,8 @@ final class PeerConnectionTests: XCTestCase {
             for y in 0..<height {
                 for x in 0..<width {
                     let offset = y * stride + x * 4
-                    let value: UInt8 = x < width / 2 ? 0 : 255
+                    let isWhite = reversed ? x < width / 2 : x >= width / 2
+                    let value: UInt8 = isWhite ? 255 : 0
                     base[offset] = value
                     base[offset + 1] = value
                     base[offset + 2] = value
@@ -248,7 +298,7 @@ final class PeerConnectionTests: XCTestCase {
         ))
         var timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: 20),
-            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid
+            presentationTimeStamp: presentationTime ?? CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid
         )
         var sample: CMSampleBuffer?
         try requireSuccess(CMSampleBufferCreateReadyWithImageBuffer(
@@ -267,7 +317,9 @@ private final class DecodedFrameRecorder: NSObject, RTCVideoRenderer {
     struct Snapshot {
         let width: Int
         let height: Int
-        let lumaContrast: Int
+        let signedLumaContrast: Int
+
+        var lumaContrast: Int { abs(signedLumaContrast) }
     }
 
     private let lock = NSLock()
@@ -296,7 +348,7 @@ private final class DecodedFrameRecorder: NSObject, RTCVideoRenderer {
         let middle = (height / 2) * Int(pixels.strideY)
         let left = Int(pixels.dataY[middle + width / 4])
         let right = Int(pixels.dataY[middle + width * 3 / 4])
-        let captured = Snapshot(width: width, height: height, lumaContrast: abs(right - left))
+        let captured = Snapshot(width: width, height: height, signedLumaContrast: right - left)
         lock.lock()
         recorded = captured
         lock.unlock()
