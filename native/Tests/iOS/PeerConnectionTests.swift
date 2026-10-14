@@ -119,6 +119,8 @@ final class PeerConnectionTests: XCTestCase {
 
     @MainActor
     func testOneFrameBeforeNegotiationIsDeliveredAndCannotReplayAfterCaptureStops() async throws {
+        RTCSetMinDebugLogLevel(.info)
+        defer { RTCSetMinDebugLogLevel(.warning) }
         let senderAudio = AppAudioDevice()
         let receiverAudio = AppAudioDevice()
         let sender = WebRTCSession(role: .sender, audioDevice: senderAudio)
@@ -161,7 +163,14 @@ final class PeerConnectionTests: XCTestCase {
                 remoteStatus == .sharing && renderer.snapshot != nil
             )
         }
-        XCTAssertTrue(delivered, "A static frame captured before negotiation must decode without another capture sample.")
+        var deliveryDiagnostic = ""
+        if !delivered || renderer.snapshot == nil {
+            let senderStatistics = await sender.statisticsSummary()
+            let receiverStatistics = await receiver.statisticsSummary()
+            deliveryDiagnostic = "\nSender statistics:\n\(senderStatistics)\nReceiver statistics:\n\(receiverStatistics)"
+            print(deliveryDiagnostic)
+        }
+        XCTAssertTrue(delivered, "A static frame captured before negotiation must decode without another capture sample.\(deliveryDiagnostic)")
         XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
         XCTAssertEqual(sender.connectionState, .connected)
         XCTAssertEqual(receiver.connectionState, .connected)

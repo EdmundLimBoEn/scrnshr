@@ -372,6 +372,20 @@ public final class WebRTCSession: NSObject, ObservableObject {
 
     public func statisticsSummary() async -> String {
         guard let peer else { return "{\"state\":\"closed\"}" }
+        let captureDiagnostics = videoInput.diagnostics()
+        let channelState: String
+        switch statusChannel?.readyState {
+        case .some(.connecting): channelState = "connecting"
+        case .some(.open): channelState = "open"
+        case .some(.closing): channelState = "closing"
+        case .some(.closed): channelState = "closed"
+        default: channelState = "unavailable"
+        }
+        let mediaDiagnostics = [
+            "role": role.rawValue, "connectionState": connectionState.rawValue,
+            "captureStatus": role == .sender ? localCaptureStatus.rawValue : remoteCaptureStatus.rawValue,
+            "captureChannelState": channelState
+        ]
         return await withCheckedContinuation { continuation in
             peer.statistics { report in
                 let allowedKeys: Set<String> = [
@@ -381,14 +395,18 @@ public final class WebRTCSession: NSObject, ObservableObject {
                     "jitterBufferEmittedCount", "currentRoundTripTime", "totalRoundTripTime",
                     "availableOutgoingBitrate", "nominated", "state", "candidateType",
                     "protocol", "relayProtocol", "qualityLimitationReason", "totalEncodeTime",
-                    "totalDecodeTime", "totalSamplesReceived", "concealedSamples"
+                    "totalDecodeTime", "totalSamplesReceived", "concealedSamples",
+                    "codecId", "mimeType", "clockRate", "encoderImplementation", "decoderImplementation",
+                    "powerEfficientEncoder", "powerEfficientDecoder", "frames", "keyFramesEncoded", "keyFramesDecoded",
+                    "packetsSent", "nackCount", "pliCount", "firCount", "retransmittedBytesSent",
+                    "framesSent", "framesReceived", "width", "height"
                 ]
-                let types: Set<String> = ["outbound-rtp", "inbound-rtp", "candidate-pair", "local-candidate", "remote-candidate"]
+                let types: Set<String> = ["outbound-rtp", "inbound-rtp", "candidate-pair", "local-candidate", "remote-candidate", "codec", "media-source"]
                 let entries: [[String: Any]] = report.statistics.values
                     .filter { types.contains($0.type) }
                     .sorted { $0.id < $1.id }
                     .map { ["id": $0.id, "type": $0.type, "values": $0.values.filter { allowedKeys.contains($0.key) }] }
-                let data = try? JSONSerialization.data(withJSONObject: ["statistics": entries], options: [.prettyPrinted, .sortedKeys])
+                let data = try? JSONSerialization.data(withJSONObject: ["media": mediaDiagnostics, "capture": captureDiagnostics, "statistics": entries], options: [.prettyPrinted, .sortedKeys])
                 continuation.resume(returning: data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}")
             }
         }
@@ -799,6 +817,11 @@ private final class ScreenVideoInput: @unchecked Sendable {
     private var cachedFrame: RTCVideoFrame?
     private var lastCapturedHostTime: TimeInterval?
     private var refreshRequested = false
+    private var framesOffered: UInt64 = 0
+    private var framesCaptured: UInt64 = 0
+    private var framesSubmitted: UInt64 = 0
+    private var framesRefreshed: UInt64 = 0
+    private var lastSubmittedTimestampNs: Int64?
     private var enabled = false
     private var draining = false
     private var generation: UInt64 = 0
@@ -817,6 +840,11 @@ private final class ScreenVideoInput: @unchecked Sendable {
         cachedFrame = nil
         lastCapturedHostTime = nil
         refreshRequested = false
+        framesOffered = 0
+        framesCaptured = 0
+        framesSubmitted = 0
+        framesRefreshed = 0
+        lastSubmittedTimestampNs = nil
         lock.unlock()
     }
 
@@ -850,6 +878,7 @@ private final class ScreenVideoInput: @unchecked Sendable {
     func offer(_ sample: CMSampleBuffer) {
         lock.lock()
         guard enabled, source != nil else { lock.unlock(); return }
+        framesOffered &+= 1
         latest = sample
         let shouldStart = !draining
         draining = true
@@ -869,6 +898,22 @@ private final class ScreenVideoInput: @unchecked Sendable {
         draining = true
         lock.unlock()
         if shouldStart { queue.async { [weak self] in self?.drain() } }
+    }
+
+    func diagnostics() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var values: [String: Any] = [
+            "enabled": enabled, "cachedFrame": cachedFrame != nil,
+            "refreshRequested": refreshRequested, "pendingFrame": latest != nil,
+            "framesOffered": framesOffered, "framesCaptured": framesCaptured,
+            "framesSubmittedToSource": framesSubmitted, "framesRefreshed": framesRefreshed
+        ]
+        if let lastSubmittedTimestampNs { values["lastSubmittedTimestampNs"] = lastSubmittedTimestampNs }
+        if let lastCapturedHostTime {
+            values["secondsSinceCapture"] = max(0, ProcessInfo.processInfo.systemUptime - lastCapturedHostTime)
+        }
+        return values
     }
 
     private func drain() {
@@ -897,6 +942,11 @@ private final class ScreenVideoInput: @unchecked Sendable {
                 let frame = RTCVideoFrame(buffer: refreshFrame.buffer, rotation: refreshFrame.rotation, timeStampNs: timestamp)
                 lock.lock()
                 let stillCurrent = enabled && generation == currentGeneration
+                if stillCurrent {
+                    framesSubmitted &+= 1
+                    framesRefreshed &+= 1
+                    lastSubmittedTimestampNs = timestamp
+                }
                 lock.unlock()
                 if stillCurrent { source.capturer(capturer, didCapture: frame) }
                 continue
@@ -938,6 +988,9 @@ private final class ScreenVideoInput: @unchecked Sendable {
                 cachedFrame = frame
                 lastCapturedHostTime = ProcessInfo.processInfo.systemUptime
                 refreshRequested = false
+                framesSubmitted &+= 1
+                framesCaptured &+= 1
+                lastSubmittedTimestampNs = timestamp
             }
             lock.unlock()
             guard stillCurrent else { continue }
