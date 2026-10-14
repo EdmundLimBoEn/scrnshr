@@ -1,0 +1,356 @@
+// Written by gpt-6.1-sol in T3 Code through the Codex harness on behalf of Edmund.
+import AVFAudio
+import CoreGraphics
+import CoreMedia
+import CoreVideo
+import Foundation
+@preconcurrency import WebRTC
+import XCTest
+@testable import ScrnshrPhone
+
+final class PeerConnectionTests: XCTestCase {
+    @MainActor
+    func testNativePeersDecodeInjectedVideoAndStopCaptureThroughTheDataChannel() async throws {
+        let originalAudioCategory = AVAudioSession.sharedInstance().category
+        let senderAudio = AppAudioDevice()
+        let receiverAudio = AppAudioDevice()
+        let sender = WebRTCSession(role: .sender, audioDevice: senderAudio)
+        let receiver = WebRTCSession(role: .receiver, audioDevice: receiverAudio)
+        let renderer = DecodedFrameRecorder()
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
+        var failures: [String] = []
+        var remoteStatus: CaptureStatus = .ready
+        var firstOffer: RTCSignal?
+        var offerCount = 0
+        var answerCount = 0
+        var frameTask: Task<Void, Never>?
+
+        defer {
+            frameTask?.cancel()
+            receiver.remoteVideoTrack?.remove(renderer)
+            sender.onSignal = nil
+            receiver.onSignal = nil
+            sender.onError = nil
+            receiver.onError = nil
+            sender.close()
+            receiver.close()
+            XCTAssertTrue(senderAudio.terminateDevice())
+            XCTAssertTrue(receiverAudio.terminateDevice())
+        }
+
+        sender.onError = { message in failures.append(message); XCTFail("Sender: \(message)") }
+        receiver.onError = { message in failures.append(message); XCTFail("Receiver: \(message)") }
+        sender.onSignal = { [weak receiver] signal in
+            if case .offer = signal {
+                offerCount += 1
+                if firstOffer == nil { firstOffer = signal }
+                receiver?.accept(signal)
+                // A retry can arrive while the first remote description is still being applied.
+                if offerCount == 1 { receiver?.accept(signal) }
+            } else {
+                receiver?.accept(signal)
+            }
+        }
+        receiver.onSignal = { [weak sender] signal in
+            if case .answer = signal { answerCount += 1 }
+            sender?.accept(signal)
+        }
+        receiver.onVideoTrack = { track in track.add(renderer) }
+        receiver.onCaptureStatus = { remoteStatus = $0 }
+        receiver.setRemoteAudioMuted(true)
+        receiver.configure(iceServers: [])
+        sender.configure(iceServers: [])
+        sender.sendCaptureStatus(.sharing)
+
+        frameTask = Task { @MainActor in
+            while !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline {
+                do {
+                    sender.sendVideo(try Self.makeVideoSample())
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    failures.append(error.localizedDescription)
+                    XCTFail("Synthetic frame: \(error)")
+                    return
+                }
+            }
+        }
+        sender.startOffer()
+
+        let connectedAndDecoded = await waitUntil(deadline: deadline) {
+            !failures.isEmpty || (
+                sender.connectionState == .connected && receiver.connectionState == .connected &&
+                remoteStatus == .sharing && renderer.snapshot != nil
+            )
+        }
+        XCTAssertTrue(connectedAndDecoded, "Native ICE, capture-status, and decoded video must arrive within 20 seconds.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+        XCTAssertEqual(sender.connectionState, .connected)
+        XCTAssertEqual(receiver.connectionState, .connected)
+        XCTAssertEqual(remoteStatus, .sharing)
+        XCTAssertTrue(senderAudio.isRecording, "The sender must use the custom app-audio device.")
+        XCTAssertEqual(AVAudioSession.sharedInstance().category, originalAudioCategory)
+        let decoded = try XCTUnwrap(renderer.snapshot, "The remote RTCVideoTrack must deliver a decoded frame.")
+        XCTAssertEqual(decoded.width, 160)
+        XCTAssertEqual(decoded.height, 120)
+        XCTAssertGreaterThan(decoded.lumaContrast, 100, "The injected black/white marker must survive native encoding and decoding.")
+        XCTAssertEqual(offerCount, 1)
+        XCTAssertEqual(answerCount, 1, "An in-flight duplicate offer must not create a second answer.")
+
+        receiver.accept(try XCTUnwrap(firstOffer))
+        let retried = await waitUntil(deadline: deadline) { answerCount == 2 || !failures.isEmpty }
+        XCTAssertTrue(retried, "An offer retry must receive the cached answer.")
+        XCTAssertEqual(answerCount, 2)
+        XCTAssertEqual(sender.connectionState, .connected)
+        XCTAssertEqual(receiver.connectionState, .connected)
+
+        frameTask?.cancel()
+        sender.sendCaptureStatus(.stopped)
+        let stopped = await waitUntil(deadline: deadline) { remoteStatus == .stopped || !failures.isEmpty }
+        XCTAssertTrue(stopped, "Stopping capture must reach the receiver through the native data channel.")
+        XCTAssertEqual(remoteStatus, .stopped)
+        sender.startOffer()
+        sender.accept(.restart)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(offerCount, 1, "Stopped capture must not authorize a new offer or ICE restart.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+    }
+
+    @MainActor
+    func testOneFrameBeforeNegotiationIsDeliveredAndCannotReplayAfterCaptureStops() async throws {
+        RTCSetMinDebugLogLevel(.info)
+        defer { RTCSetMinDebugLogLevel(.warning) }
+        let senderAudio = AppAudioDevice()
+        let receiverAudio = AppAudioDevice()
+        let sender = WebRTCSession(role: .sender, audioDevice: senderAudio)
+        let receiver = WebRTCSession(role: .receiver, audioDevice: receiverAudio)
+        let renderer = DecodedFrameRecorder()
+        let deadline = ProcessInfo.processInfo.systemUptime + 22
+        var remoteStatus: CaptureStatus = .ready
+        var failures: [String] = []
+
+        defer {
+            receiver.remoteVideoTrack?.remove(renderer)
+            sender.onSignal = nil
+            receiver.onSignal = nil
+            sender.onError = nil
+            receiver.onError = nil
+            sender.close()
+            receiver.close()
+            XCTAssertTrue(senderAudio.terminateDevice())
+            XCTAssertTrue(receiverAudio.terminateDevice())
+        }
+        sender.onError = { message in failures.append(message); XCTFail("Sender: \(message)") }
+        receiver.onError = { message in failures.append(message); XCTFail("Receiver: \(message)") }
+        sender.onSignal = { [weak receiver] signal in receiver?.accept(signal) }
+        receiver.onSignal = { [weak sender] signal in sender?.accept(signal) }
+        receiver.onVideoTrack = { track in track.add(renderer) }
+        receiver.onCaptureStatus = { remoteStatus = $0 }
+        receiver.setRemoteAudioMuted(true)
+        receiver.configure(iceServers: [])
+        sender.configure(iceServers: [])
+        sender.sendCaptureStatus(.sharing)
+
+        // ScreenCaptureKit can remain idle after its first static picture.
+        let initialSample = try Self.makeVideoSample()
+        let initialPresentationTime = CMSampleBufferGetPresentationTimeStamp(initialSample)
+        sender.sendVideo(initialSample)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(renderer.snapshot)
+        sender.startOffer()
+        let delivered = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 10)) {
+            !failures.isEmpty || (
+                sender.connectionState == .connected && receiver.connectionState == .connected &&
+                remoteStatus == .sharing && renderer.snapshot != nil
+            )
+        }
+        var deliveryDiagnostic = ""
+        if !delivered || renderer.snapshot == nil {
+            let senderStatistics = await sender.statisticsSummary()
+            let receiverStatistics = await receiver.statisticsSummary()
+            deliveryDiagnostic = "\nSender statistics:\n\(senderStatistics)\nReceiver statistics:\n\(receiverStatistics)"
+            print(deliveryDiagnostic)
+        }
+        XCTAssertTrue(delivered, "A static frame captured before negotiation must decode without another capture sample.\(deliveryDiagnostic)")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+        XCTAssertEqual(sender.connectionState, .connected)
+        XCTAssertEqual(receiver.connectionState, .connected)
+        let decoded = try XCTUnwrap(renderer.snapshot)
+        XCTAssertEqual(decoded.width, 160)
+        XCTAssertEqual(decoded.height, 120)
+        XCTAssertGreaterThan(decoded.lumaContrast, 100)
+
+        let senderStatistics = await sender.statisticsSummary()
+        let receiverStatistics = await receiver.statisticsSummary()
+        XCTAssertEqual(try Self.videoCodec(in: senderStatistics, direction: "outbound-rtp"), "video/VP8")
+        XCTAssertEqual(try Self.videoCodec(in: receiverStatistics, direction: "inbound-rtp"), "video/VP8")
+
+        let initialRefreshCount = try Self.captureRefreshCount(in: senderStatistics)
+        try await Task.sleep(nanoseconds: 2_200_000_000)
+        let idleStatistics = await sender.statisticsSummary()
+        XCTAssertGreaterThan(try Self.captureRefreshCount(in: idleStatistics), initialRefreshCount)
+        // A delayed capture can be newer than the last capture but older than a synthetic refresh.
+        let delayedPresentationTime = CMTimeAdd(initialPresentationTime, CMTime(value: 1, timescale: 10))
+        sender.sendVideo(try Self.makeVideoSample(reversed: true, presentationTime: delayedPresentationTime))
+        let updated = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 3)) {
+            renderer.snapshot.map({ $0.signedLumaContrast < -100 }) == true || !failures.isEmpty
+        }
+        var updateDiagnostic = ""
+        if !updated {
+            let updatedSenderStatistics = await sender.statisticsSummary()
+            let updatedReceiverStatistics = await receiver.statisticsSummary()
+            updateDiagnostic = "\nSender statistics:\n\(updatedSenderStatistics)\nReceiver statistics:\n\(updatedReceiverStatistics)"
+            print(updateDiagnostic)
+        }
+        XCTAssertTrue(updated, "One delayed changed picture after a heartbeat refresh must decode within three seconds without a frame pump.\(updateDiagnostic)")
+        XCTAssertLessThan(try XCTUnwrap(renderer.snapshot).signedLumaContrast, -100)
+
+        sender.sendCaptureStatus(.stopped)
+        let stopped = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 2)) {
+            remoteStatus == .stopped || !failures.isEmpty
+        }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(remoteStatus, .stopped)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        renderer.reset()
+        let replayedWhileStopped = await waitUntil(deadline: ProcessInfo.processInfo.systemUptime + 3) {
+            renderer.snapshot != nil || !failures.isEmpty
+        }
+        XCTAssertFalse(replayedWhileStopped, "The heartbeat must not refresh video after sharing stops.")
+
+        // Reauthorizing the track alone must not resurrect a previous capture's picture.
+        sender.sendCaptureStatus(.sharing)
+        let resumed = await waitUntil(deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 2)) {
+            remoteStatus == .sharing || !failures.isEmpty
+        }
+        XCTAssertTrue(resumed)
+        XCTAssertEqual(remoteStatus, .sharing)
+        let replayedAfterResume = await waitUntil(deadline: ProcessInfo.processInfo.systemUptime + 3) {
+            renderer.snapshot != nil || !failures.isEmpty
+        }
+        XCTAssertFalse(replayedAfterResume, "Resumed sharing must wait for a new capture sample after the cached picture was cleared.")
+        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
+    }
+
+    @MainActor
+    private func waitUntil(deadline: TimeInterval, condition: () -> Bool) async -> Bool {
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if condition() { return true }
+            if Task.isCancelled { return false }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return condition()
+    }
+
+    private static func videoCodec(in summary: String, direction: String) throws -> String {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(summary.utf8)) as? [String: Any])
+        let statistics = try XCTUnwrap(object["statistics"] as? [[String: Any]])
+        let video = try XCTUnwrap(statistics.first { entry in
+            let values = entry["values"] as? [String: Any]
+            return entry["type"] as? String == direction && values?["kind"] as? String == "video"
+        })
+        let videoValues = try XCTUnwrap(video["values"] as? [String: Any])
+        let codecId = try XCTUnwrap(videoValues["codecId"] as? String)
+        let codec = try XCTUnwrap(statistics.first {
+            $0["type"] as? String == "codec" && $0["id"] as? String == codecId
+        })
+        let codecValues = try XCTUnwrap(codec["values"] as? [String: Any])
+        return try XCTUnwrap(codecValues["mimeType"] as? String)
+    }
+
+    private static func captureRefreshCount(in summary: String) throws -> UInt64 {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(summary.utf8)) as? [String: Any])
+        let capture = try XCTUnwrap(object["capture"] as? [String: Any])
+        return try XCTUnwrap(capture["framesRefreshed"] as? NSNumber).uint64Value
+    }
+
+    private static func makeVideoSample(reversed: Bool = false, presentationTime: CMTime? = nil) throws -> CMSampleBuffer {
+        let width = 160
+        let height = 120
+        let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:]]
+        var allocated: CVPixelBuffer?
+        try requireSuccess(CVPixelBufferCreate(
+            kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary, &allocated
+        ))
+        let buffer = try XCTUnwrap(allocated)
+        try requireSuccess(CVPixelBufferLockBaseAddress(buffer, []))
+        do {
+            defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer)).assumingMemoryBound(to: UInt8.self)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = y * stride + x * 4
+                    let isWhite = reversed ? x < width / 2 : x >= width / 2
+                    let value: UInt8 = isWhite ? 255 : 0
+                    base[offset] = value
+                    base[offset + 1] = value
+                    base[offset + 2] = value
+                    base[offset + 3] = 255
+                }
+            }
+        }
+        var format: CMVideoFormatDescription?
+        try requireSuccess(CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescriptionOut: &format
+        ))
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 20),
+            presentationTimeStamp: presentationTime ?? CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid
+        )
+        var sample: CMSampleBuffer?
+        try requireSuccess(CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: buffer,
+            formatDescription: try XCTUnwrap(format), sampleTiming: &timing, sampleBufferOut: &sample
+        ))
+        return try XCTUnwrap(sample)
+    }
+
+    private static func requireSuccess(_ status: OSStatus) throws {
+        if status != noErr { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+}
+
+private final class DecodedFrameRecorder: NSObject, RTCVideoRenderer {
+    struct Snapshot {
+        let width: Int
+        let height: Int
+        let signedLumaContrast: Int
+
+        var lumaContrast: Int { abs(signedLumaContrast) }
+    }
+
+    private let lock = NSLock()
+    private var recorded: Snapshot?
+
+    var snapshot: Snapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func reset() {
+        lock.lock()
+        recorded = nil
+        lock.unlock()
+    }
+
+    func setSize(_ size: CGSize) {}
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard let frame else { return }
+        let pixels = frame.buffer.toI420()
+        let width = Int(pixels.width)
+        let height = Int(pixels.height)
+        guard width > 3, height > 0 else { return }
+        let middle = (height / 2) * Int(pixels.strideY)
+        let left = Int(pixels.dataY[middle + width / 4])
+        let right = Int(pixels.dataY[middle + width * 3 / 4])
+        let captured = Snapshot(width: width, height: height, signedLumaContrast: right - left)
+        lock.lock()
+        recorded = captured
+        lock.unlock()
+    }
+}

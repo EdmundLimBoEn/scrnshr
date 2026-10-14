@@ -1,0 +1,6 @@
+# Copy to .dev.vars. Generate your own owner token with 32 random bytes.
+OWNER_TOKEN=replace-with-a-random-owner-token-at-least-32-characters
+# Explicit LAN development mode. Internet and relay-only checks require TURN.
+ALLOW_STUN_ONLY=true
+# TURN_KEY_ID=
+# TURN_API_TOKEN=

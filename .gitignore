@@ -1,0 +1,16 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.env
+.env.*
+!.env.example
+.dev.vars
+node_modules/
+.wrangler/
+.cf/
+coverage/
+*.xcresult
+__pycache__/
+.cloudflare/
