@@ -90,6 +90,23 @@ export class SessionRoom extends DurableObject<unknown> {
     this.ctx.storage.sql.exec("INSERT OR REPLACE INTO role_quota VALUES (?, ?, ?, ?)", role, kind, startsAt, count);
   }
 
+  private persistFrameQuota(role: Role, attachments: (Attachment | null)[]): { startsAt: number; count: number } {
+    const now = Date.now();
+    let window = this.quota(role, "frame");
+    for (const metadata of attachments) {
+      if (metadata === null) continue;
+      if (window === null || metadata.frameWindowStart > window.startsAt) {
+        window = { startsAt: metadata.frameWindowStart, count: metadata.frameCount };
+      } else if (metadata.frameWindowStart === window.startsAt) {
+        // Replacements inherit cumulative counts; summing would count frames twice.
+        window.count = Math.max(window.count, metadata.frameCount);
+      }
+    }
+    if (window === null || now - window.startsAt >= FRAME_WINDOW_MS) window = { startsAt: now, count: 0 };
+    this.saveQuota(role, "frame", window.startsAt, window.count);
+    return window;
+  }
+
   // Connection attempts are rare, so they are counted in SQLite and survive everything.
   private allowConnect(role: Role, limit: number, windowMs: number): boolean {
     const now = Date.now();
@@ -201,16 +218,10 @@ export class SessionRoom extends DurableObject<unknown> {
     const server = pair[1];
     const previous = this.socketFor(state, role);
     const connectionId = crypto.randomUUID();
+    // Closing sockets may still hold counts whose close callback has not run.
+    // Persist every generation before the replacement can receive any frames.
+    const window = this.persistFrameQuota(role, this.ctx.getWebSockets(role).map(attachment));
     this.ctx.acceptWebSocket(server, [role]);
-    // A reconnect inherits the role's frame budget from the replaced socket, or from the
-    // window saved when the last socket for this role closed, so reconnecting cannot reset it.
-    const now = Date.now();
-    const prior = previous !== null ? attachment(previous) : null;
-    const inherited = prior !== null
-      ? { startsAt: prior.frameWindowStart, count: prior.frameCount }
-      : this.quota(role, "frame");
-    const window = inherited !== null && now - inherited.startsAt < FRAME_WINDOW_MS
-      ? inherited : { startsAt: now, count: 0 };
     server.serializeAttachment({ role, connectionId, frameWindowStart: window.startsAt, frameCount: window.count } satisfies Attachment);
     this.setConnection(role, connectionId);
     if (previous !== null) {
@@ -348,8 +359,9 @@ export class SessionRoom extends DurableObject<unknown> {
   private disconnected(socket: WebSocket): void {
     const metadata = attachment(socket);
     const state = this.active();
-    if (metadata === null || state === null || currentConnection(state, metadata.role) !== metadata.connectionId) return;
-    this.saveQuota(metadata.role, "frame", metadata.frameWindowStart, metadata.frameCount);
+    if (metadata === null || state === null) return;
+    this.persistFrameQuota(metadata.role, [metadata]);
+    if (currentConnection(state, metadata.role) !== metadata.connectionId) return;
     this.setConnection(metadata.role, null);
     const other = this.socketFor(state, metadata.role === "receiver" ? "sender" : "receiver");
     if (other !== null) this.send(other, { type: "peer-left", role: metadata.role });
