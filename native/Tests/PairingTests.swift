@@ -23,6 +23,49 @@ final class PairingTests: XCTestCase {
         XCTAssertThrowsError(try PairingCode.parse(String(repeating: "A", count: 8193)))
     }
 
+    private func pairingLink(now: Date, sessionDelay: TimeInterval, joinDelay: TimeInterval) throws -> String {
+        let payload: [String: Any] = [
+            "version": 1, "server": "https://pair.example.com", "sessionId": id,
+            "joinToken": key, "pairingKey": key,
+            "expiresAt": now.addingTimeInterval(sessionDelay).timeIntervalSinceReferenceDate,
+            "joinExpiresAt": now.addingTimeInterval(joinDelay).timeIntervalSinceReferenceDate
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return "scrnshr://join?data=\(data.base64URL)"
+    }
+
+    func testRejectsOverlongPairingExpiry() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        for (sessionDelay, joinDelay) in [(7321.0, 300.0), (7200.0, 421.0), (1e20, 300.0), (1e20, 1e20)] {
+            let link = try pairingLink(now: now, sessionDelay: sessionDelay, joinDelay: joinDelay)
+            XCTAssertThrowsError(try PairingCode.parse(link, now: now)) { error in
+                guard case PairingError.invalidCode = error else {
+                    return XCTFail("Expected invalidCode, got \(error)")
+                }
+            }
+        }
+    }
+
+    func testRejectsJoinAfterSessionExpiry() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let link = try pairingLink(now: now, sessionDelay: 60, joinDelay: 61)
+        XCTAssertThrowsError(try PairingCode.parse(link, now: now)) { error in
+            guard case PairingError.invalidCode = error else {
+                return XCTFail("Expected invalidCode, got \(error)")
+            }
+        }
+    }
+
+    func testAcceptsNormalPairingAndExpiryBounds() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        for (sessionDelay, joinDelay) in [(7200.0, 300.0), (7320.0, 420.0), (60.0, 60.0)] {
+            let link = try pairingLink(now: now, sessionDelay: sessionDelay, joinDelay: joinDelay)
+            let code = try PairingCode.parse(link, now: now)
+            XCTAssertEqual(code.expiresAt, now.addingTimeInterval(sessionDelay))
+            XCTAssertEqual(code.joinExpiresAt, now.addingTimeInterval(joinDelay))
+        }
+    }
+
     func testAuthenticatesBothDirectionsAndRejectsReplay() throws {
         var phone = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .sender)
         var mac = try SignalAuthenticator(sessionId: id, pairingKey: key, role: .receiver)
