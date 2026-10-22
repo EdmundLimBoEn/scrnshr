@@ -8,6 +8,7 @@ export { SessionRoom, RequestLimiter };
 export interface Env {
   SESSIONS: DurableObjectNamespace<SessionRoom>;
   RATE_LIMITS: DurableObjectNamespace<RequestLimiter>;
+  INGRESS_LIMIT: RateLimit;
   OWNER_TOKEN: string;
   TURN_KEY_ID?: string;
   TURN_API_TOKEN?: string;
@@ -83,6 +84,10 @@ export default {
     if (request.method !== "GET") return error("GET required", 405);
     if (peerBearer(request) === null) return error("Peer Bearer capability required", 401);
     if (operation === "ws" && request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return error("WebSocket upgrade required", 426);
+    const { success } = await env.INGRESS_LIMIT.limit({
+      key: request.headers.get("CF-Connecting-IP") ?? "local-development",
+    });
+    if (!success) return error("Session requests rate limited. Retry in one minute.", 429);
     const room = env.SESSIONS.getByName(sessionId);
     if (operation === "ice") return ice(request, env, room);
     return room.fetch(request);

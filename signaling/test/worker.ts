@@ -21,6 +21,11 @@ export default {
     if (request.method === "POST" && sessionId !== undefined) {
       return Response.json(await env.TEST_SESSIONS.getByName(sessionId).runAlarmForTest());
     }
+    if (request.headers.has("X-Test-Forbid-Session-Lookup")) {
+      env = { ...env, SESSIONS: new Proxy(env.SESSIONS, {
+        get() { throw new Error("Blocked request touched the session namespace"); },
+      }) };
+    }
     return productionWorker.fetch(request, env);
   },
 } satisfies ExportedHandler<TestEnv>;

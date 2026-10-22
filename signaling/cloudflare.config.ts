@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => ({
     env: {
       SESSIONS: bindings.durableObject({ worker: name, exportName: "SessionRoom" }),
       RATE_LIMITS: bindings.durableObject({ worker: name, exportName: "RequestLimiter" }),
+      INGRESS_LIMIT: bindings.rateLimit({ namespace: "1001", simple: { limit: 60, period: 60 } }),
       OWNER_TOKEN: bindings.secret(),
       TURN_KEY_ID: bindings.secret(),
       TURN_API_TOKEN: bindings.secret(),

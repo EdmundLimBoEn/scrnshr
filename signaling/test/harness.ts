@@ -115,6 +115,7 @@ export async function fixture(t: TestContext, options: FixtureOptions = {}) {
       TEST_SESSIONS: { className: "SessionRoom", useSQLite: true },
       RATE_LIMITS: { className: "RequestLimiter", useSQLite: true },
     },
+    ratelimits: { INGRESS_LIMIT: { namespace_id: "1001", simple: { limit: 60, period: 60 } } },
     durableObjectsPersist: storage,
     bindings: { OWNER_TOKEN, ALLOW_STUN_ONLY: "true", ...options.bindings },
     outboundService: options.outbound ?? (async () => { throw new Error("Unexpected outbound network request in test"); }),
@@ -151,9 +152,9 @@ export async function fixture(t: TestContext, options: FixtureOptions = {}) {
         && typeof value.joinToken === "string" && typeof value.expiresAt === "string");
       return { sessionId: value.sessionId, receiverToken: value.receiverToken, joinToken: value.joinToken, expiresAt: value.expiresAt };
     },
-    async connect(session: CreatedSession, token: string): Promise<Peer> {
+    async connect(session: CreatedSession, token: string, ip = "192.0.2.1"): Promise<Peer> {
       const response = await runtime.dispatchFetch(`https://signaling.test/v1/sessions/${session.sessionId}/ws`, {
-        headers: { Authorization: `Bearer ${token}`, Upgrade: "websocket" },
+        headers: { Authorization: `Bearer ${token}`, Upgrade: "websocket", "CF-Connecting-IP": ip },
       });
       assert.equal(response.status, 101);
       assert.ok(response.webSocket);
