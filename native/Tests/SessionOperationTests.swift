@@ -18,6 +18,8 @@ final class SessionOperationTests: XCTestCase {
     @MainActor
     private func assertMediaClosesBeforeServerNotification(replaceSession: Bool) async throws {
         _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
         let signaling = DelayedEndSignalingClient()
         let namespace = "test-\(UUID())."
         let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: namespace)

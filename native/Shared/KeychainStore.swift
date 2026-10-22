@@ -3,7 +3,15 @@ import Foundation
 import Security
 
 enum KeychainStore {
+    #if DEBUG
+    /// Tests on unsigned macOS runners can't reach the data-protection keychain.
+    static var testMemory: [String: Data]?
+    #endif
+
     static func save(_ data: Data, account: String) throws {
+        #if DEBUG
+        if testMemory != nil { testMemory?[account] = data; return }
+        #endif
         let query = Self.query(account: account)
         let update: [String: Any] = [kSecValueData as String: data]
         let result = SecItemUpdate(query as CFDictionary, update as CFDictionary)
@@ -19,6 +27,9 @@ enum KeychainStore {
     }
 
     static func load(account: String) throws -> Data? {
+        #if DEBUG
+        if let memory = testMemory { return memory[account] }
+        #endif
         var query = Self.query(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -30,6 +41,9 @@ enum KeychainStore {
     }
 
     static func delete(account: String) {
+        #if DEBUG
+        if testMemory != nil { testMemory?[account] = nil; return }
+        #endif
         let query = Self.query(account: account)
         SecItemDelete(query as CFDictionary)
     }
