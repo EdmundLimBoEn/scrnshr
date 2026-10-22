@@ -363,6 +363,26 @@ test("TURN credentials are generated server-side using the backend secret and a 
   }]);
 });
 
+test("TURN credential TTL follows the remaining session lifetime plus grace", async t => {
+  const calls: unknown[] = [];
+  const server = await fixture(t, {
+    bindings: { TURN_KEY_ID: "test-key", TURN_API_TOKEN: "secret" },
+    outbound: async request => {
+      calls.push(await request.json());
+      return RuntimeResponse.json({ iceServers: [{ urls: ["turn:example.test:3478"], username: "u", credential: "p" }] });
+    },
+  });
+  const session = await server.create();
+  const before = Date.now();
+  await (await server.storage(session)).exec("UPDATE session SET expires_at = ? WHERE id = 1", Date.now() + 5 * 60_000);
+  assert.equal((await server.ice(session, session.receiverToken)).status, 200);
+  const elapsedSeconds = Math.ceil((Date.now() - before) / 1000);
+  assert.equal(calls.length, 1);
+  const { ttl } = calls[0] as { ttl: number };
+  assert.ok(Number.isInteger(ttl));
+  assert.ok(ttl >= 900 - elapsedSeconds && ttl <= 900, `Expected about 900 seconds, got ${ttl}`);
+});
+
 for (const badUpstream of [
   { name: "HTTP error", status: 403, value: { error: "bad upstream credentials" } },
   { name: "invalid JSON", status: 200, value: "not-json" },
