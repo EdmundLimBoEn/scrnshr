@@ -33,6 +33,11 @@ extension Data {
 }
 
 struct PairingCode: Codable, Equatable {
+    // Match JOIN_DURATION_MS and SESSION_DURATION_MS in signaling/src/protocol.ts.
+    private static let joinDuration: TimeInterval = 5 * 60
+    private static let clockSkew: TimeInterval = 2 * 60
+    static let maximumSessionDelay: TimeInterval = 2 * 60 * 60 + clockSkew
+
     let version: Int
     let server: URL
     let sessionId: String
@@ -48,7 +53,7 @@ struct PairingCode: Codable, Equatable {
         self.joinToken = joinToken
         self.pairingKey = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0).base64URL }
         self.expiresAt = expiresAt
-        self.joinExpiresAt = min(expiresAt, .now.addingTimeInterval(300))
+        self.joinExpiresAt = min(expiresAt, .now.addingTimeInterval(Self.joinDuration))
         try validate(now: .now)
     }
 
@@ -82,6 +87,11 @@ struct PairingCode: Codable, Equatable {
               Data(base64URL: pairingKey)?.count == 32 else { throw PairingError.invalidCode }
         _ = try Self.validateServer(server)
         guard expiresAt > now, joinExpiresAt > now else { throw PairingError.expired }
+        guard joinExpiresAt <= expiresAt,
+              joinExpiresAt <= now.addingTimeInterval(Self.joinDuration + Self.clockSkew),
+              expiresAt <= now.addingTimeInterval(Self.maximumSessionDelay) else {
+            throw PairingError.invalidCode
+        }
     }
 
     static func validateServer(_ url: URL) throws -> URL {

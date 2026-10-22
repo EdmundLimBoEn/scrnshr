@@ -469,7 +469,7 @@ final class SessionCoordinator: ObservableObject {
     private func scheduleExpiry(_ expiration: Date) {
         expiryTask?.cancel()
         expiryTask = Task { [weak self] in
-            let interval = max(0, expiration.timeIntervalSinceNow)
+            let interval = min(max(0, expiration.timeIntervalSinceNow), PairingCode.maximumSessionDelay)
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             await self.stop()
