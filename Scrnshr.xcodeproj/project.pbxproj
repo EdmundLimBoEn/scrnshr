@@ -96,6 +96,12 @@
 			path = "native/Tests/SessionOperationTests.swift";
 			sourceTree = "SOURCE_ROOT";
 		};
+		493D48F1A125CC10DAC9EFAE = {
+			isa = "PBXFileReference";
+			lastKnownFileType = "sourcecode.swift";
+			path = "native/Tests/SignalingClientTests.swift";
+			sourceTree = "SOURCE_ROOT";
+		};
 		1C2105057E6BC5202B0AFF53 = {
 			isa = "PBXFileReference";
 			lastKnownFileType = "sourcecode.swift";
@@ -214,6 +220,7 @@
 				"88004D8A248F1AF554CADEC4",
 				"A262CB27BF58DAFD8530D7A9",
 				"A616C6DCD978EF05855B46C2",
+				"493D48F1A125CC10DAC9EFAE",
 				"1C2105057E6BC5202B0AFF53",
 				"34D66B069AD212B31514F596",
 				"4CBAFED9311DEF0F2C1B63AD",
@@ -664,6 +671,10 @@
 			isa = "PBXBuildFile";
 			fileRef = "A616C6DCD978EF05855B46C2";
 		};
+		22D64067DE8D5317D1CB221A = {
+			isa = "PBXBuildFile";
+			fileRef = "493D48F1A125CC10DAC9EFAE";
+		};
 		3968CF419AA6DF1BCE044525 = {
 			isa = "PBXBuildFile";
 			fileRef = "1C2105057E6BC5202B0AFF53";
@@ -675,6 +686,7 @@
 				"144C032D5E8540E6BF588D4B",
 				"3584FD6BF3550A90C44986EB",
 				"65DEDAFE22BB2AC9E9118CF7",
+				"22D64067DE8D5317D1CB221A",
 				"3968CF419AA6DF1BCE044525",
 			);
 			runOnlyForDeploymentPostprocessing = 0;

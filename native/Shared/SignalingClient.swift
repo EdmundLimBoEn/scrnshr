@@ -186,8 +186,19 @@ final class SignalingClient {
     }
 
     private func fetch<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await session.data(for: request)
+        let limit = 64 * 1024
+        let (bytes, response) = try await session.bytes(for: request)
+        // Dropping the iterator alone does not cancel an unfinished response.
+        defer { bytes.task.cancel() }
         guard let response = response as? HTTPURLResponse else { throw PairingError.invalidServer }
+        guard response.expectedContentLength <= Int64(limit) else {
+            throw URLError(.dataLengthExceedsMaximum)
+        }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < limit else { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
+        }
         guard (200..<300).contains(response.statusCode) else {
             let detail = (try? JSONDecoder().decode(ServerErrorBody.self, from: data).error) ?? "Server returned HTTP \(response.statusCode)."
             throw NSError(domain: "scrnshr.signaling", code: response.statusCode,
