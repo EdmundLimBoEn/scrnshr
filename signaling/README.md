@@ -2,6 +2,8 @@
 
 This Worker uses one SQLite Durable Object per session and separate hashed limiter objects. It approves exactly one iPhone sender, forwards authenticated-peer signaling, and issues expiring Cloudflare TURN credentials. See [the protocol](../docs/protocol.md) for native client messages and errors.
 
+WebSocket frame budgets (120 frames per 10 seconds) belong to the session role: a reconnect inherits the replaced socket's window, and the window is saved when a role's socket closes, so reconnecting does not reset it. Each role also allows 12 authenticated connection attempts per minute, including its initial connection.
+
 ## Local checks
 
 Use Bun to install the pinned toolchain, with Node.js 22.18 or newer installed. The current Cloudflare CLI loads TypeScript configuration through Node; do not run it with Bun's `--bun` override.

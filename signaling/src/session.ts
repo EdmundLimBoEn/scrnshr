@@ -73,6 +73,31 @@ export class SessionRoom extends DurableObject<unknown> {
       receiver_ice_start INTEGER NOT NULL DEFAULT 0, receiver_ice_count INTEGER NOT NULL DEFAULT 0,
       sender_ice_start INTEGER NOT NULL DEFAULT 0, sender_ice_count INTEGER NOT NULL DEFAULT 0
     )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS role_quota (
+      role TEXT NOT NULL, kind TEXT NOT NULL, starts_at INTEGER NOT NULL, count INTEGER NOT NULL,
+      PRIMARY KEY (role, kind)
+    )`);
+  }
+
+  private quota(role: Role, kind: "frame" | "connect"): { startsAt: number; count: number } | null {
+    const row = this.ctx.storage.sql.exec<{ starts_at: number; count: number }>(
+      "SELECT starts_at, count FROM role_quota WHERE role = ? AND kind = ?", role, kind,
+    ).toArray()[0];
+    return row === undefined ? null : { startsAt: row.starts_at, count: row.count };
+  }
+
+  private saveQuota(role: Role, kind: "frame" | "connect", startsAt: number, count: number): void {
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO role_quota VALUES (?, ?, ?, ?)", role, kind, startsAt, count);
+  }
+
+  // Connection attempts are rare, so they are counted in SQLite and survive everything.
+  private allowConnect(role: Role, limit: number, windowMs: number): boolean {
+    const now = Date.now();
+    const row = this.quota(role, "connect");
+    const fresh = row === null || now - row.startsAt >= windowMs;
+    if (!fresh && row.count >= limit) return false;
+    this.saveQuota(role, "connect", fresh ? now : row.startsAt, fresh ? 1 : row.count + 1);
+    return true;
   }
 
   async initialize(input: {
@@ -166,6 +191,7 @@ export class SessionRoom extends DurableObject<unknown> {
     if (state === null) return error("Session ended or expired", 410);
     const role = this.roleFor(state, tokenHash, true);
     if (role === null) return error("Invalid peer capability", 401);
+    if (!this.allowConnect(role, 12, 60_000)) return error("Connection attempts rate limited", 429);
     if (role === "sender" && state.kind === "pending" && this.socketFor(state, role) !== null) {
       return error("A sender is already awaiting approval", 409);
     }
@@ -176,7 +202,16 @@ export class SessionRoom extends DurableObject<unknown> {
     const previous = this.socketFor(state, role);
     const connectionId = crypto.randomUUID();
     this.ctx.acceptWebSocket(server, [role]);
-    server.serializeAttachment({ role, connectionId, frameWindowStart: Date.now(), frameCount: 0 } satisfies Attachment);
+    // A reconnect inherits the role's frame budget from the replaced socket, or from the
+    // window saved when the last socket for this role closed, so reconnecting cannot reset it.
+    const now = Date.now();
+    const prior = previous !== null ? attachment(previous) : null;
+    const inherited = prior !== null
+      ? { startsAt: prior.frameWindowStart, count: prior.frameCount }
+      : this.quota(role, "frame");
+    const window = inherited !== null && now - inherited.startsAt < FRAME_WINDOW_MS
+      ? inherited : { startsAt: now, count: 0 };
+    server.serializeAttachment({ role, connectionId, frameWindowStart: window.startsAt, frameCount: window.count } satisfies Attachment);
     this.setConnection(role, connectionId);
     if (previous !== null) {
       this.send(previous, { type: "error", message: "Connection replaced by an authenticated reconnect" });
@@ -314,6 +349,7 @@ export class SessionRoom extends DurableObject<unknown> {
     const metadata = attachment(socket);
     const state = this.active();
     if (metadata === null || state === null || currentConnection(state, metadata.role) !== metadata.connectionId) return;
+    this.saveQuota(metadata.role, "frame", metadata.frameWindowStart, metadata.frameCount);
     this.setConnection(metadata.role, null);
     const other = this.socketFor(state, metadata.role === "receiver" ? "sender" : "receiver");
     if (other !== null) this.send(other, { type: "peer-left", role: metadata.role });
@@ -335,7 +371,10 @@ export class SessionRoom extends DurableObject<unknown> {
     const state = this.session();
     if (state === null) return;
     if (state.kind === "ended") {
-      if (Date.now() >= state.expiresAt + 24 * 60 * 60 * 1000) this.ctx.storage.sql.exec("DELETE FROM session WHERE id = 1");
+      if (Date.now() >= state.expiresAt + 24 * 60 * 60 * 1000) {
+        this.ctx.storage.sql.exec("DELETE FROM session WHERE id = 1");
+        this.ctx.storage.sql.exec("DELETE FROM role_quota");
+      }
       return;
     }
     if (this.active() === null) return;

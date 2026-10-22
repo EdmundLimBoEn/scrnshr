@@ -425,3 +425,62 @@ test("owner-wide session creation limit prevents bypass by changing IP address",
   });
   assert.equal(blocked.status, 429);
 });
+
+for (const role of ["sender", "receiver"] as const) {
+  test(`${role} frame quota survives replacement, disconnect and hibernation`, async t => {
+    const { server, session, receiver, sender, resumeToken } = await approvedSession(t);
+    let peer = role === "sender" ? sender : receiver;
+    const other = role === "sender" ? receiver : sender;
+    const token = role === "sender" ? resumeToken : session.receiverToken;
+    // Approval already consumed one receiver frame.
+    for (let i = 0; i < (role === "sender" ? 60 : 59); i++) {
+      peer.send(SIGNAL);
+      await other.receive("signal");
+    }
+    peer = await server.connect(session, token);
+    await peer.receive("approved");
+    for (let i = 0; i < 60; i++) {
+      peer.send(SIGNAL);
+      await other.receive("signal");
+    }
+    peer.close();
+    await other.receive("peer-left");
+    await server.runtime.unsafeEvictDurableObject("signaling-test", "SessionRoom", { name: session.sessionId, webSockets: "hibernate" });
+    peer = await server.connect(session, token);
+    await peer.receive("approved");
+    peer.send(SIGNAL);
+    assert.match(String((await peer.receive("error")).message), /rate limited/i);
+    await peer.expectClose(4008);
+    other.send({ type: "approve", accepted: true });
+    assert.match(String((await other.receive("error")).message), /only the receiver/i);
+    await (await server.storage(session)).exec("UPDATE role_quota SET starts_at = ? WHERE role = ? AND kind = 'frame'", Date.now() - 11_000, role);
+    peer = await server.connect(session, token);
+    peer.send(SIGNAL);
+    assert.deepEqual(await other.receive("signal"), SIGNAL);
+  });
+
+  test(`${role} connection attempts are bounded across hibernation without replacing the current socket`, async t => {
+    const { server, session, receiver, sender, resumeToken } = await approvedSession(t);
+    const token = role === "sender" ? resumeToken : session.receiverToken;
+    const other = role === "sender" ? receiver : sender;
+    let peer = role === "sender" ? sender : receiver;
+    for (let i = 1; i < 12; i++) {
+      peer = await server.connect(session, token);
+      await peer.receive("approved");
+    }
+    await server.runtime.unsafeEvictDurableObject("signaling-test", "SessionRoom", { name: session.sessionId, webSockets: "hibernate" });
+    const response = await server.runtime.dispatchFetch(`https://signaling.test/v1/sessions/${session.sessionId}/ws`, {
+      headers: { Authorization: `Bearer ${token}`, Upgrade: "websocket" },
+    });
+    assert.equal(response.status, 429);
+    peer.send(SIGNAL);
+    assert.deepEqual(await other.receive("signal"), SIGNAL);
+    const otherReplacement = await server.connect(session, role === "sender" ? session.receiverToken : resumeToken);
+    await otherReplacement.receive("approved");
+    await (await server.storage(session)).exec("UPDATE role_quota SET starts_at = ? WHERE role = ? AND kind = 'connect'", Date.now() - 61_000, role);
+    const replacement = await server.connect(session, token);
+    await replacement.receive("approved");
+    replacement.send(SIGNAL);
+    assert.deepEqual(await otherReplacement.receive("signal"), SIGNAL);
+  });
+}
