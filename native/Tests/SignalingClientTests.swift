@@ -3,6 +3,35 @@ import XCTest
 @testable import ScrnshrMac
 
 final class SignalingClientTests: XCTestCase {
+    @MainActor
+    func testTerminalUpgradeRejectionsStopRetriesAndRequestPairing() async throws {
+        for status in [401, 403, 404, 410] {
+            let client = RejectedSocketClient(status: status)
+            let recovery = expectation(description: "Fresh pairing requested for HTTP \(status)")
+            client.onPairingRequired = { recovery.fulfill() }
+            client.onError = { _ in XCTFail("Terminal rejection must not report reconnecting") }
+            try client.connect(server: URL(string: "https://pair.example.test")!, sessionId: "test", token: "lost-approval")
+            await fulfillment(of: [recovery], timeout: 1)
+            try await Task.sleep(nanoseconds: 2_200_000_000)
+            XCTAssertEqual(client.opened, 1)
+            XCTAssertTrue(client.lastSocket?.wasResumed == true)
+            XCTAssertEqual(client.lastSocket?.maximumMessageSize, 65_536)
+            XCTAssertTrue(client.lastSocket?.wasCancelled == true)
+            client.close()
+        }
+    }
+
+    @MainActor
+    func testTransientUpgradeFailureStillRetries() async throws {
+        let client = RejectedSocketClient(status: 503)
+        let retry = expectation(description: "Transient failure retried")
+        client.onOpen = { if client.opened == 2 { retry.fulfill() } }
+        client.onPairingRequired = { XCTFail("Transient failure must preserve pairing") }
+        try client.connect(server: URL(string: "https://pair.example.test")!, sessionId: "test", token: "resume")
+        await fulfillment(of: [retry], timeout: 4)
+        client.close()
+    }
+
     func testOversizedStreamIsCancelledBeforeEOFForSuccessAndError() async throws {
         // No EOF is sent: only client cancellation can complete these requests.
         for status in [200, 503] {
@@ -187,5 +216,45 @@ private final class BoundedResponseURLProtocol: URLProtocol, @unchecked Sendable
         guard !stopped else { return }
         stopped = true
         active?.cancelled.fulfill()
+    }
+}
+
+@MainActor
+private final class RejectedSocketClient: SignalingClient {
+    let status: Int
+    var opened = 0
+    var onOpen: (() -> Void)?
+    var lastSocket: RejectedWebSocket?
+
+    init(status: Int) { self.status = status; super.init() }
+
+    override func makeSocket(with request: URLRequest) -> any WebSocketTasking {
+        opened += 1
+        let socket = RejectedWebSocket(status: status)
+        lastSocket = socket
+        onOpen?()
+        return socket
+    }
+}
+
+private final class RejectedWebSocket: WebSocketTasking {
+    let status: Int
+    var maximumMessageSize = 0
+    var wasResumed = false
+    var wasCancelled = false
+    init(status: Int) { self.status = status }
+    var response: URLResponse? {
+        HTTPURLResponse(url: URL(string: "https://pair.example.test")!, statusCode: status,
+                        httpVersion: "HTTP/1.1", headerFields: nil)
+    }
+    func resume() { wasResumed = true }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        throw URLError(.badServerResponse)
+    }
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        wasCancelled = true
     }
 }
