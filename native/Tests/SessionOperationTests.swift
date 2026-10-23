@@ -8,6 +8,76 @@ import XCTest
 
 final class SessionOperationTests: XCTestCase {
     @MainActor
+    func testStopDiscardsUSBStartWaitingForSessionStop() async {
+        let usb = USBScreenSource()
+        let suspended = expectation(description: "Session stop suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        var presentations = 0
+        let start = usb.scheduleStart(deviceID: "nonexistent-test-device", stopSession: {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                suspended.fulfill()
+            }
+        }, showPresentation: { presentations += 1 })
+        await fulfillment(of: [suspended], timeout: 5)
+
+        // Both Stop controls and every wireless source switch call usb.stop().
+        usb.stop()
+        var lateCaptureUpdates = 0
+        usb.onStatus = { _ in lateCaptureUpdates += 1 }
+        resume?.resume()
+        await start.value
+
+        XCTAssertEqual(presentations, 0)
+        XCTAssertEqual(lateCaptureUpdates, 0, "Stale startup must not even enter USB discovery/capture.")
+        XCTAssertFalse(usb.isRunning)
+    }
+
+    @MainActor
+    func testNewUSBStartSupersedesPendingStart() async {
+        let usb = USBScreenSource()
+        let suspended = expectation(description: "Old session stop suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        var oldPresentations = 0
+        var newPresentations = 0
+        let oldStart = usb.scheduleStart(deviceID: "old-nonexistent-test-device", stopSession: {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                suspended.fulfill()
+            }
+        }, showPresentation: { oldPresentations += 1 })
+        await fulfillment(of: [suspended], timeout: 5)
+
+        let newStart = usb.scheduleStart(deviceID: "new-nonexistent-test-device", stopSession: {},
+                                         showPresentation: { newPresentations += 1 })
+        await newStart.value
+        XCTAssertEqual(newPresentations, 1, "A current startup must still proceed.")
+        var lateCaptureUpdates = 0
+        usb.onStatus = { _ in lateCaptureUpdates += 1 }
+        resume?.resume()
+        await oldStart.value
+
+        XCTAssertEqual(oldPresentations, 0)
+        XCTAssertEqual(lateCaptureUpdates, 0, "The old start must not replace the new capture operation.")
+        usb.stop()
+    }
+
+    @MainActor
+    func testStopBeforeUSBStartupTaskRuns() async {
+        let usb = USBScreenSource()
+        var sessionStops = 0
+        var presentations = 0
+        let start = usb.scheduleStart(deviceID: "nonexistent-test-device",
+                                      stopSession: { sessionStops += 1 },
+                                      showPresentation: { presentations += 1 })
+        usb.stop()
+        await start.value
+
+        XCTAssertEqual(sessionStops, 0, "A superseded task must not stop a newer wireless session.")
+        XCTAssertEqual(presentations, 0)
+    }
+
+    @MainActor
     func testFailedICECreationClearsPartialSessionAndCanRetry() async throws {
         _ = NSApplication.shared
         KeychainStore.testMemory = [:]

@@ -49,6 +49,23 @@ final class USBScreenSource: ObservableObject {
         }
     }
 
+    @discardableResult
+    func scheduleStart(deviceID: String, includeAudio: Bool = false,
+                       stopSession: @escaping @MainActor () async -> Void,
+                       showPresentation: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+        // Register the whole source switch synchronously, before the task can suspend.
+        // All Stop and wireless source-switch actions already invalidate this generation.
+        stop()
+        let operation = generation
+        return Task { @MainActor in
+            guard generation == operation else { return }
+            await stopSession()
+            guard generation == operation else { return }
+            showPresentation()
+            await start(deviceID: deviceID, includeAudio: includeAudio)
+        }
+    }
+
     func start(deviceID: String, includeAudio: Bool = false) async {
         stop()
         let operation = generation

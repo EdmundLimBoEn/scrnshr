@@ -127,7 +127,7 @@ private struct CalibrationView: View {
                     Spacer()
                     HStack { corner("BOTTOM LEFT", .blue); Spacer(); corner("BOTTOM RIGHT", .yellow) }
                 }.padding(8)
-            }.overlay(Rectangle().stroke(.orange, lineWidth: 3))
+            }.overlay(Rectangle().stroke(.red, lineWidth: 3))
         }
     }
 
