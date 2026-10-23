@@ -159,6 +159,109 @@ final class SessionOperationTests: XCTestCase {
         XCTAssertTrue(coordinator.error?.contains("scan its new code") == true)
     }
 
+    @MainActor
+    func testRestoreTerminalHTTPFailuresRequireFreshPairing() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        for role in [PeerRole.receiver, .sender] {
+            for status in [401, 410] {
+                let namespace = "restore-\(role.rawValue)-\(status)."
+                let account = namespace + "session-\(role.rawValue)"
+                try saveRestoreFixture(account: account)
+                let signaling = DelayedEndSignalingClient()
+                signaling.iceError = NSError(domain: "scrnshr.signaling", code: status)
+                let coordinator = SessionCoordinator(role: role, signaling: signaling, credentialNamespace: namespace)
+                defer { coordinator.presentation.close() }
+                XCTAssertTrue(coordinator.canRestore)
+
+                await coordinator.restoreSession()
+
+                XCTAssertFalse(coordinator.hasSession)
+                XCTAssertFalse(coordinator.approved)
+                XCTAssertFalse(coordinator.canRestore)
+                XCTAssertFalse(coordinator.isBusy)
+                XCTAssertNil(try KeychainStore.load(account: account))
+                XCTAssertEqual(coordinator.status, "Pairing required")
+                XCTAssertTrue(coordinator.error?.contains("scan its new code") == true)
+                XCTAssertEqual(signaling.connections, 0)
+            }
+        }
+    }
+
+    @MainActor
+    func testRestoreTransientFailurePreservesCredentialsForRetry() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        let account = "restore-retry.session-receiver"
+        try saveRestoreFixture(account: account)
+        let saved = try KeychainStore.load(account: account)
+        let signaling = DelayedEndSignalingClient()
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "restore-retry.")
+        defer { coordinator.presentation.close() }
+        for failure in [URLError(.cannotConnectToHost) as Error,
+                        NSError(domain: "scrnshr.signaling", code: 503)] {
+            signaling.iceError = failure
+            await coordinator.restoreSession()
+            XCTAssertFalse(coordinator.approved)
+            XCTAssertFalse(coordinator.isBusy)
+            XCTAssertTrue(coordinator.canRestore)
+            XCTAssertNotNil(coordinator.error)
+            XCTAssertEqual(try KeychainStore.load(account: account), saved)
+            XCTAssertEqual(signaling.connections, 0)
+        }
+        signaling.iceError = nil
+        await coordinator.restoreSession()
+        XCTAssertTrue(coordinator.approved)
+        XCTAssertNil(coordinator.error)
+        XCTAssertEqual(signaling.connections, 1)
+        await coordinator.stop()
+    }
+
+    @MainActor
+    func testRestoreExpiresWhileICEIsPending() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        let account = "restore-expiry.session-receiver"
+        try saveRestoreFixture(account: account, lifetime: 2)
+        let signaling = DelayedEndSignalingClient()
+        let started = expectation(description: "Restore ICE suspended")
+        signaling.iceStarted = { started.fulfill() }
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "restore-expiry.")
+        defer { coordinator.presentation.close() }
+        let restore = Task { await coordinator.restoreSession() }
+        await fulfillment(of: [started], timeout: 1)
+        XCTAssertFalse(coordinator.approved)
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertFalse(coordinator.hasSession, "Restore must expire before ICE returns")
+        XCTAssertFalse(coordinator.canRestore)
+        XCTAssertNil(try KeychainStore.load(account: account))
+        signaling.finishICE()
+        await restore.value
+        XCTAssertFalse(coordinator.hasSession, "Late ICE must not revive the expired session")
+        XCTAssertFalse(coordinator.approved)
+        XCTAssertEqual(signaling.connections, 0)
+        XCTAssertEqual(coordinator.status, "Session expired. Create a new session.")
+        await coordinator.stop()
+    }
+
+    @MainActor
+    private func saveRestoreFixture(account: String, lifetime: TimeInterval = 7200) throws {
+        struct Saved: Encodable {
+            let code: PairingCode
+            let token: String
+            let expiresAt: Date
+        }
+        let expiration = Date().addingTimeInterval(lifetime)
+        let code = try PairingCode(server: URL(string: "https://pair.example.com")!, sessionId: UUID().uuidString,
+                                   joinToken: Data(repeating: 2, count: 32).base64URL, expiresAt: expiration)
+        try KeychainStore.save(JSONEncoder().encode(Saved(code: code,
+                                                         token: Data(repeating: 1, count: 32).base64URL,
+                                                         expiresAt: expiration)), account: account)
+    }
+
     func testStopClosesMediaBeforeServerNotificationCompletes() async throws {
         try await assertMediaClosesBeforeServerNotification(replaceSession: false)
     }
@@ -373,6 +476,8 @@ private final class SessionCreationURLProtocol: URLProtocol, @unchecked Sendable
 
 @MainActor
 private final class DelayedEndSignalingClient: SignalingClient {
+    var iceError: Error?
+    var connections = 0
     var failICE = false
     var lifetime: TimeInterval = 7200
     var iceStarted: (() -> Void)?
@@ -395,6 +500,7 @@ private final class DelayedEndSignalingClient: SignalingClient {
     }
 
     override func iceConfiguration(server: URL, sessionId: String, token: String) async throws -> ICEConfiguration {
+        if let iceError { throw iceError }
         if failICE { throw URLError(.cannotConnectToHost) }
         if let iceStarted {
             await withCheckedContinuation { continuation in
@@ -405,7 +511,7 @@ private final class DelayedEndSignalingClient: SignalingClient {
         return ICEConfiguration(iceServers: [], connectivity: "Direct")
     }
 
-    override func connect(server: URL, sessionId: String, token: String) throws {}
+    override func connect(server: URL, sessionId: String, token: String) throws { connections += 1 }
 
     override func endSession() async {
         guard let endStarted else { return }
