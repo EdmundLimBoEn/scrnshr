@@ -44,7 +44,7 @@ private struct ClientMessage: Encodable {
 private struct ServerErrorBody: Decodable { let error: String? }
 
 @MainActor
-final class SignalingClient {
+class SignalingClient {
     var onMessage: ((ServerMessage) -> Void)?
     var onAvailability: ((Bool) -> Void)?
     var onError: ((String) -> Void)?

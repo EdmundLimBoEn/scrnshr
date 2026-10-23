@@ -96,8 +96,7 @@ final class SessionCoordinator: ObservableObject {
            let saved = try? JSONDecoder().decode(SavedSession.self, from: data) {
             canRestore = saved.expiresAt > .now
         }
-        installCallbacks()
-        media.configure(iceServers: [], relayOnly: false)
+        configureMedia(iceServers: [], relayOnly: false)
     }
 
     func startDirectSession() async {
@@ -110,7 +109,7 @@ final class SessionCoordinator: ObservableObject {
         mode = .direct
         approved = true
         connectivity = "Direct LAN"
-        media.configure(iceServers: [], relayOnly: false)
+        configureMedia(iceServers: [], relayOnly: false)
         status = role == .sender ? "Share the screen, then copy the offer to the Mac." : "Import the phone's offer to connect."
         #if os(macOS)
         presentation.showWindow()
@@ -148,7 +147,7 @@ final class SessionCoordinator: ObservableObject {
             let ice = try await signaling.iceConfiguration(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
             guard operationGeneration == sessionGeneration else { return }
             connectivity = ice.connectivity
-            media.configure(iceServers: ice.iceServers, relayOnly: relayOnly)
+            configureMedia(iceServers: ice.iceServers, relayOnly: relayOnly)
             internetMediaConfigured = true
             signalingGeneration = operationGeneration
             try signaling.connect(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
@@ -253,9 +252,7 @@ final class SessionCoordinator: ObservableObject {
         isBusy = true
         defer { if operationGeneration == sessionGeneration { isBusy = false } }
         media.sendCaptureStatus(.stopped)
-        #if os(macOS)
-        presentation.setCaptureStatus(.stopped)
-        #endif
+        closeMedia()
         #if os(iOS)
         await capture.stop()
         guard operationGeneration == sessionGeneration else { return }
@@ -280,6 +277,8 @@ final class SessionCoordinator: ObservableObject {
         isBusy = preserveBusy
         expiryTask?.cancel()
         suppressCaptureCallbacks = true
+        if endServerSession, code != nil { media.sendCaptureStatus(.stopped) }
+        closeMedia()
         #if os(iOS)
         await capture.stop()
         guard operationGeneration == sessionGeneration else { return operationGeneration }
@@ -287,15 +286,10 @@ final class SessionCoordinator: ObservableObject {
         #endif
         suppressCaptureCallbacks = false
         if endServerSession, code != nil {
-            media.sendCaptureStatus(.stopped)
-            #if os(macOS)
-            presentation.setCaptureStatus(.stopped)
-            #endif
             await signaling.endSession()
             guard operationGeneration == sessionGeneration else { return operationGeneration }
         }
         signaling.close()
-        media.close()
         code = nil
         token = nil
         expiresAt = nil
@@ -315,7 +309,23 @@ final class SessionCoordinator: ObservableObject {
         return operationGeneration
     }
 
+    private func closeMedia() {
+        // sessionGeneration has already invalidated callbacks before any suspension.
+        isSharing = false
+        #if os(macOS)
+        presentation.setCaptureStatus(.stopped)
+        presentation.setVideoTrack(nil)
+        #endif
+        media.close()
+    }
+
+    private func configureMedia(iceServers: [ICEServer], relayOnly: Bool) {
+        installCallbacks()
+        media.configure(iceServers: iceServers, relayOnly: relayOnly)
+    }
+
     private func installCallbacks() {
+        let generation = sessionGeneration
         media.onSignal = { [weak self] signal in self?.send(signal) }
         media.onError = { [weak self] message in self?.error = message }
         media.onConnectionState = { [weak self] state in
@@ -333,9 +343,10 @@ final class SessionCoordinator: ObservableObject {
             #endif
         }
         media.onCaptureStatus = { [weak self] status in
-            self?.isSharing = status == .sharing
+            guard let self, self.sessionGeneration == generation else { return }
+            self.isSharing = status == .sharing
             #if os(macOS)
-            self?.presentation.setCaptureStatus(status)
+            self.presentation.setCaptureStatus(status)
             #endif
         }
         #if os(iOS)
@@ -349,7 +360,10 @@ final class SessionCoordinator: ObservableObject {
             if status == .stopped { self.status = "Sharing stopped. Approve sharing on the iPhone to restart." }
         }
         #else
-        media.onVideoTrack = { [weak self] track in self?.presentation.setVideoTrack(track) }
+        media.onVideoTrack = { [weak self] track in
+            guard let self, self.sessionGeneration == generation else { return }
+            self.presentation.setVideoTrack(track)
+        }
         presentation.onMuteChanged = { [weak media] muted in media?.setRemoteAudioMuted(muted) }
         #endif
         signaling.onMessage = { [weak self] message in
@@ -454,7 +468,7 @@ final class SessionCoordinator: ObservableObject {
             throw CancellationError()
         }
         connectivity = ice.connectivity
-        media.configure(iceServers: ice.iceServers, relayOnly: relayOnly)
+        configureMedia(iceServers: ice.iceServers, relayOnly: relayOnly)
         internetMediaConfigured = true
     }
 

@@ -1,9 +1,90 @@
 // Written by gpt-6.1-sol in T3 Code through the Codex harness on behalf of Edmund.
+import AppKit
+import CoreVideo
 import Foundation
+import WebRTC
 import XCTest
 @testable import ScrnshrMac
 
 final class SessionOperationTests: XCTestCase {
+    func testStopClosesMediaBeforeServerNotificationCompletes() async throws {
+        try await assertMediaClosesBeforeServerNotification(replaceSession: false)
+    }
+
+    func testReplacementClosesMediaBeforeServerNotificationCompletes() async throws {
+        try await assertMediaClosesBeforeServerNotification(replaceSession: true)
+    }
+
+    @MainActor
+    private func assertMediaClosesBeforeServerNotification(replaceSession: Bool) async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        let signaling = DelayedEndSignalingClient()
+        let namespace = "test-\(UUID())."
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: namespace)
+        defer {
+            coordinator.presentation.close()
+            KeychainStore.delete(account: namespace + "owner-token")
+            KeychainStore.delete(account: namespace + "session-receiver")
+        }
+        let previousServer = UserDefaults.standard.object(forKey: "signaling-server")
+        defer { UserDefaults.standard.set(previousServer, forKey: "signaling-server") }
+        coordinator.serverAddress = "https://pair.example.com"
+        coordinator.ownerToken = "test-owner-credential"
+        await coordinator.createInternetSession()
+        XCTAssertNil(coordinator.error)
+        let oldStatus = try XCTUnwrap(coordinator.media.onCaptureStatus)
+        let oldTrack = try XCTUnwrap(coordinator.media.onVideoTrack)
+        oldStatus(.sharing)
+        XCTAssertTrue(coordinator.isSharing)
+        XCTAssertNotEqual(coordinator.media.connectionState, .closed)
+
+        let started = expectation(description: "Server notification suspended")
+        signaling.endStarted = { started.fulfill() }
+        let operation = Task { @MainActor in
+            if replaceSession { await coordinator.startDirectSession() }
+            else { await coordinator.stop() }
+        }
+        await fulfillment(of: [started], timeout: 5)
+
+        // The notification is still suspended: local privacy must not depend on it.
+        XCTAssertEqual(coordinator.media.connectionState, .closed)
+        XCTAssertFalse(coordinator.isSharing)
+        oldStatus(.sharing)
+        XCTAssertFalse(coordinator.isSharing)
+        XCTAssertTrue(coordinator.presentation.isMuted)
+        XCTAssertEqual(coordinator.presentation.statusText, "Screen sharing stopped")
+
+        signaling.finishEnd()
+        await operation.value
+        if !replaceSession { await coordinator.startDirectSession() }
+        let currentStatus = try XCTUnwrap(coordinator.media.onCaptureStatus)
+        currentStatus(.sharing)
+        XCTAssertTrue(coordinator.isSharing, "The new session must receive fresh callbacks.")
+        oldStatus(.stopped)
+        XCTAssertTrue(coordinator.isSharing, "Old callbacks must remain invalid after reconfiguration.")
+
+        // With a renderable picture, an old track callback must not discard the new picture.
+        if RTCMTLNSVideoView.isMetalAvailable() {
+            currentStatus(.sharing)
+            coordinator.presentation.setConnectionState(.connected)
+            var pixelBuffer: CVPixelBuffer?
+            XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 16, 16, kCVPixelFormatType_32BGRA,
+                                               nil, &pixelBuffer), kCVReturnSuccess)
+            let frame = RTCVideoFrame(buffer: RTCCVPixelBuffer(pixelBuffer: try XCTUnwrap(pixelBuffer)),
+                                      rotation: ._0, timeStampNs: 1_000_000)
+            coordinator.presentation.setExternalVideoFrame(frame)
+            XCTAssertFalse(coordinator.presentation.isMuted)
+            let factory = RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(),
+                                                   decoderFactory: RTCDefaultVideoDecoderFactory())
+            oldTrack(factory.videoTrack(with: factory.videoSource(forScreenCast: true), trackId: "stale"))
+            XCTAssertFalse(coordinator.presentation.isMuted)
+            XCTAssertEqual(coordinator.presentation.statusText, "Presenting iPhone screen")
+        }
+        await coordinator.stop()
+    }
+
     func testStopDiscardsDelayedSessionCreation() async throws {
         let fixture = DelayedSessionCreation(started: expectation(description: "Session creation started"))
         SessionCreationURLProtocol.install(fixture)
@@ -135,5 +216,38 @@ private final class SessionCreationURLProtocol: URLProtocol, @unchecked Sendable
         guard !stopped else { return }
         client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
         stopped = true
+    }
+}
+
+@MainActor
+private final class DelayedEndSignalingClient: SignalingClient {
+    var endStarted: (() -> Void)?
+    private var pendingEnd: CheckedContinuation<Void, Never>?
+
+    override func createSession(server: URL, ownerToken: String) async throws -> CreatedSession {
+        CreatedSession(sessionId: UUID().uuidString,
+                       receiverToken: Data(repeating: 1, count: 32).base64URL,
+                       joinToken: Data(repeating: 2, count: 32).base64URL,
+                       expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7200)))
+    }
+
+    override func iceConfiguration(server: URL, sessionId: String, token: String) async throws -> ICEConfiguration {
+        ICEConfiguration(iceServers: [], connectivity: "Direct")
+    }
+
+    override func connect(server: URL, sessionId: String, token: String) throws {}
+
+    override func endSession() async {
+        guard let endStarted else { return }
+        await withCheckedContinuation { continuation in
+            pendingEnd = continuation
+            endStarted()
+        }
+    }
+
+    func finishEnd() {
+        endStarted = nil
+        pendingEnd?.resume()
+        pendingEnd = nil
     }
 }
