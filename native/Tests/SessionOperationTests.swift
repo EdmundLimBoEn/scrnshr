@@ -7,6 +7,88 @@ import XCTest
 @testable import ScrnshrMac
 
 final class SessionOperationTests: XCTestCase {
+    @MainActor
+    func testFailedICECreationClearsPartialSessionAndCanRetry() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        let previousServer = UserDefaults.standard.object(forKey: "signaling-server")
+        defer {
+            KeychainStore.testMemory = nil
+            UserDefaults.standard.set(previousServer, forKey: "signaling-server")
+        }
+        let signaling = DelayedEndSignalingClient()
+        signaling.failICE = true
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "creation-test.")
+        defer { coordinator.presentation.close() }
+        coordinator.serverAddress = "https://pair.example.com"
+        coordinator.ownerToken = "test-owner-credential"
+        await coordinator.createInternetSession()
+        XCTAssertFalse(coordinator.hasSession)
+        XCTAssertFalse(coordinator.canRestore)
+        XCTAssertFalse(coordinator.isBusy)
+        XCTAssertEqual(coordinator.pairingURL, "")
+        XCTAssertNotNil(coordinator.error)
+        XCTAssertNil(try KeychainStore.load(account: "creation-test.session-receiver"))
+        signaling.failICE = false
+        await coordinator.createInternetSession()
+        XCTAssertTrue(coordinator.hasSession)
+        XCTAssertFalse(coordinator.pairingURL.isEmpty)
+        XCTAssertNil(coordinator.error)
+        await coordinator.stop()
+    }
+
+    @MainActor
+    func testCreationExpiresWhileICEIsStillPending() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        let previousServer = UserDefaults.standard.object(forKey: "signaling-server")
+        defer {
+            KeychainStore.testMemory = nil
+            UserDefaults.standard.set(previousServer, forKey: "signaling-server")
+        }
+        let signaling = DelayedEndSignalingClient()
+        signaling.lifetime = 2
+        let started = expectation(description: "ICE request suspended")
+        signaling.iceStarted = { started.fulfill() }
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "expiry-test.")
+        defer { coordinator.presentation.close() }
+        coordinator.serverAddress = "https://pair.example.com"
+        coordinator.ownerToken = "test-owner-credential"
+        let creation = Task { await coordinator.createInternetSession() }
+        await fulfillment(of: [started], timeout: 1)
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        XCTAssertFalse(coordinator.hasSession, "Expiry must run before ICE returns")
+        XCTAssertFalse(coordinator.canRestore)
+        XCTAssertEqual(coordinator.pairingURL, "")
+        signaling.finishICE()
+        await creation.value
+        XCTAssertFalse(coordinator.hasSession, "Late ICE must not restore the expired session")
+        XCTAssertEqual(coordinator.status, "Session expired. Create a new session.")
+        await coordinator.stop()
+    }
+
+    @MainActor
+    func testTerminalRejectionClearsSessionAndOffersFreshPairing() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        let signaling = DelayedEndSignalingClient()
+        let coordinator = SessionCoordinator(role: .sender, signaling: signaling, credentialNamespace: "rejection-test.")
+        defer { coordinator.presentation.close() }
+        let code = try PairingCode(server: URL(string: "https://pair.example.com")!, sessionId: UUID().uuidString,
+                                   joinToken: Data(repeating: 2, count: 32).base64URL,
+                                   expiresAt: Date().addingTimeInterval(7200))
+        await coordinator.joinInternetSession(try code.url.absoluteString)
+        XCTAssertTrue(coordinator.hasSession)
+        signaling.onPairingRequired?()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(coordinator.hasSession)
+        XCTAssertFalse(coordinator.canRestore)
+        XCTAssertFalse(coordinator.approved)
+        XCTAssertEqual(coordinator.status, "Pairing required")
+        XCTAssertTrue(coordinator.error?.contains("scan its new code") == true)
+    }
+
     func testStopClosesMediaBeforeServerNotificationCompletes() async throws {
         try await assertMediaClosesBeforeServerNotification(replaceSession: false)
     }
@@ -221,6 +303,17 @@ private final class SessionCreationURLProtocol: URLProtocol, @unchecked Sendable
 
 @MainActor
 private final class DelayedEndSignalingClient: SignalingClient {
+    var failICE = false
+    var lifetime: TimeInterval = 7200
+    var iceStarted: (() -> Void)?
+    private var pendingICE: CheckedContinuation<Void, Never>?
+
+    func finishICE() {
+        pendingICE?.resume()
+        pendingICE = nil
+        iceStarted = nil
+    }
+
     var endStarted: (() -> Void)?
     private var pendingEnd: CheckedContinuation<Void, Never>?
 
@@ -228,11 +321,18 @@ private final class DelayedEndSignalingClient: SignalingClient {
         CreatedSession(sessionId: UUID().uuidString,
                        receiverToken: Data(repeating: 1, count: 32).base64URL,
                        joinToken: Data(repeating: 2, count: 32).base64URL,
-                       expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7200)))
+                       expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(lifetime)))
     }
 
     override func iceConfiguration(server: URL, sessionId: String, token: String) async throws -> ICEConfiguration {
-        ICEConfiguration(iceServers: [], connectivity: "Direct")
+        if failICE { throw URLError(.cannotConnectToHost) }
+        if let iceStarted {
+            await withCheckedContinuation { continuation in
+                pendingICE = continuation
+                iceStarted()
+            }
+        }
+        return ICEConfiguration(iceServers: [], connectivity: "Direct")
     }
 
     override func connect(server: URL, sessionId: String, token: String) throws {}
