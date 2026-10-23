@@ -48,6 +48,7 @@ class SignalingClient {
     var onMessage: ((ServerMessage) -> Void)?
     var onAvailability: ((Bool) -> Void)?
     var onError: ((String) -> Void)?
+    var onPairingRequired: (() -> Void)?
 
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -120,11 +121,15 @@ class SignalingClient {
         reconnectAttempts = 0
     }
 
+    func makeSocket(with request: URLRequest) -> URLSessionWebSocketTask {
+        session.webSocketTask(with: request)
+    }
+
     private func openSocket() {
         guard !intentionallyClosed, let endpoint, let token else { return }
         var request = URLRequest(url: endpoint)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let activeSocket = session.webSocketTask(with: request)
+        let activeSocket = makeSocket(with: request)
         socket = activeSocket
         activeSocket.maximumMessageSize = 65536
         activeSocket.resume()
@@ -155,6 +160,16 @@ class SignalingClient {
                 }
             } catch {
                 guard let self, !self.intentionallyClosed, self.socket === activeSocket else { return }
+                // Failed upgrades retain their HTTP response on the task. These
+                // capabilities cannot recover by retrying the same pairing code.
+                if let status = (activeSocket.response as? HTTPURLResponse)?.statusCode,
+                   [401, 403, 404, 410].contains(status) {
+                    self.close()
+                    self.token = nil
+                    self.endpoint = nil
+                    self.onPairingRequired?()
+                    return
+                }
                 self.onAvailability?(false)
                 self.onError?("Signaling disconnected. The current picture can continue while reconnecting.")
                 self.reconnectAttempts += 1

@@ -119,6 +119,7 @@ final class SessionCoordinator: ObservableObject {
     func createInternetSession() async {
         guard !isBusy else { return }
         var operationGeneration = sessionGeneration
+        var initializationStarted = false
         isBusy = true
         defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
@@ -129,6 +130,7 @@ final class SessionCoordinator: ObservableObject {
             }
             operationGeneration = await reset(endServerSession: true, preserveBusy: true)
             guard operationGeneration == sessionGeneration else { return }
+            initializationStarted = true
             mode = .internet
             status = "Creating session"
             let created = try await signaling.createSession(server: server, ownerToken: ownerToken)
@@ -139,6 +141,7 @@ final class SessionCoordinator: ObservableObject {
             code = pairing
             token = created.receiverToken
             expiresAt = expiration
+            scheduleExpiry(expiration)
             authenticator = try SignalAuthenticator(sessionId: pairing.sessionId, pairingKey: pairing.pairingKey, role: role)
             pairingURL = try pairing.url.absoluteString
             UserDefaults.standard.set(server.absoluteString, forKey: "signaling-server")
@@ -151,12 +154,21 @@ final class SessionCoordinator: ObservableObject {
             internetMediaConfigured = true
             signalingGeneration = operationGeneration
             try signaling.connect(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
-            scheduleExpiry(expiration)
             status = "Scan the code on the iPhone."
             #if os(macOS)
             presentation.showWindow()
             #endif
-        } catch { if operationGeneration == sessionGeneration { fail(error) } }
+        } catch {
+            guard operationGeneration == sessionGeneration else { return }
+            if initializationStarted {
+                operationGeneration = await reset(preserveBusy: true)
+                guard operationGeneration == sessionGeneration else { return }
+                KeychainStore.delete(account: sessionCredentialAccount)
+                canRestore = false
+                status = "Session creation failed. Create a new session to retry."
+            }
+            fail(error)
+        }
     }
 
     func joinInternetSession(_ text: String) async {
@@ -380,6 +392,18 @@ final class SessionCoordinator: ObservableObject {
             self.signalingAvailable = available
             if regained, self.role == .sender, self.isSharing, self.approved,
                self.media.connectionState != .connected { self.media.startOffer() }
+        }
+        signaling.onPairingRequired = { [weak self] in
+            guard let self, let generation = self.signalingGeneration else { return }
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.sessionGeneration else { return }
+                let resetGeneration = await self.reset()
+                guard resetGeneration == self.sessionGeneration else { return }
+                KeychainStore.delete(account: self.sessionCredentialAccount)
+                self.canRestore = false
+                self.status = "Pairing required"
+                self.error = "This session can no longer reconnect. Create a new session on the Mac and scan its new code on the iPhone."
+            }
         }
         signaling.onError = { [weak self] message in
             guard let self, self.signalingGeneration == self.sessionGeneration else { return }
