@@ -43,6 +43,18 @@ private struct ClientMessage: Encodable {
 
 private struct ServerErrorBody: Decodable { let error: String? }
 
+// Class identity lets the client ignore results from a replaced connection.
+protocol WebSocketTasking: AnyObject {
+    var maximumMessageSize: Int { get set }
+    var response: URLResponse? { get }
+    func resume()
+    func receive() async throws -> URLSessionWebSocketTask.Message
+    func send(_ message: URLSessionWebSocketTask.Message) async throws
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+}
+
+extension URLSessionWebSocketTask: WebSocketTasking {}
+
 @MainActor
 class SignalingClient {
     var onMessage: ((ServerMessage) -> Void)?
@@ -50,7 +62,7 @@ class SignalingClient {
     var onError: ((String) -> Void)?
     var onPairingRequired: (() -> Void)?
 
-    private var socket: URLSessionWebSocketTask?
+    private var socket: (any WebSocketTasking)?
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
@@ -121,7 +133,7 @@ class SignalingClient {
         reconnectAttempts = 0
     }
 
-    func makeSocket(with request: URLRequest) -> URLSessionWebSocketTask {
+    func makeSocket(with request: URLRequest) -> any WebSocketTasking {
         session.webSocketTask(with: request)
     }
 

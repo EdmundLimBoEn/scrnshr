@@ -14,6 +14,8 @@ final class SignalingClientTests: XCTestCase {
             await fulfillment(of: [recovery], timeout: 1)
             try await Task.sleep(nanoseconds: 2_200_000_000)
             XCTAssertEqual(client.opened, 1)
+            XCTAssertTrue(client.lastSocket?.wasResumed == true)
+            XCTAssertEqual(client.lastSocket?.maximumMessageSize, 65_536)
             XCTAssertTrue(client.lastSocket?.wasCancelled == true)
             client.close()
         }
@@ -226,7 +228,7 @@ private final class RejectedSocketClient: SignalingClient {
 
     init(status: Int) { self.status = status; super.init() }
 
-    override func makeSocket(with request: URLRequest) -> URLSessionWebSocketTask {
+    override func makeSocket(with request: URLRequest) -> any WebSocketTasking {
         opened += 1
         let socket = RejectedWebSocket(status: status)
         lastSocket = socket
@@ -235,19 +237,24 @@ private final class RejectedSocketClient: SignalingClient {
     }
 }
 
-private final class RejectedWebSocket: URLSessionWebSocketTask, @unchecked Sendable {
+private final class RejectedWebSocket: WebSocketTasking {
     let status: Int
+    var maximumMessageSize = 0
+    var wasResumed = false
     var wasCancelled = false
-    init(status: Int) { self.status = status; super.init() }
-    override var response: URLResponse? {
+    init(status: Int) { self.status = status }
+    var response: URLResponse? {
         HTTPURLResponse(url: URL(string: "https://pair.example.test")!, statusCode: status,
                         httpVersion: "HTTP/1.1", headerFields: nil)
     }
-    override func resume() {}
-    override func receive() async throws -> URLSessionWebSocketTask.Message {
+    func resume() { wasResumed = true }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
         throw URLError(.badServerResponse)
     }
-    override func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        throw URLError(.badServerResponse)
+    }
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         wasCancelled = true
     }
 }
