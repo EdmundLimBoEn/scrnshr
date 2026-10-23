@@ -81,7 +81,7 @@ private struct MacControls: View {
                                 }
                             }
                             if session.connectivity == "local-only" {
-                                Text("This server has no TURN relay. Internet connectivity is unavailable.").foregroundStyle(.orange)
+                                Text("This server has no TURN relay. Internet connectivity is unavailable.").foregroundStyle(.red)
                             }
                         }.padding(6)
                     }
@@ -122,11 +122,9 @@ private struct MacControls: View {
                         Toggle("Enable experimental USB audio", isOn: $usbAudio).disabled(usb.isRunning)
                         HStack {
                             Button("Start USB capture") {
-                                Task {
-                                    await session.stop()
-                                    presentation.showWindow()
-                                    await usb.start(deviceID: selectedUSB, includeAudio: usbAudio)
-                                }
+                                usb.scheduleStart(deviceID: selectedUSB, includeAudio: usbAudio,
+                                                  stopSession: { await session.stop() },
+                                                  showPresentation: { presentation.showWindow() })
                             }.disabled(selectedUSB.isEmpty || usb.isRunning)
                             Button("Stop USB") { usb.stop() }.disabled(!usb.isRunning)
                         }
