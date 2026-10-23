@@ -212,20 +212,29 @@ final class SessionCoordinator: ObservableObject {
             code = saved.code
             token = saved.token
             expiresAt = saved.expiresAt
+            scheduleExpiry(saved.expiresAt)
             authenticator = try SignalAuthenticator(sessionId: saved.code.sessionId, pairingKey: saved.code.pairingKey,
                                                     role: role, checkpoint: saved.authentication)
             awaitingReceiverRestart = role == .receiver
-            approved = true
             try await configureInternetMedia(expectedGeneration: operationGeneration)
             guard operationGeneration == sessionGeneration else { return }
             signalingGeneration = operationGeneration
             try signaling.connect(server: saved.code.server, sessionId: saved.code.sessionId, token: saved.token)
-            scheduleExpiry(saved.expiresAt)
+            approved = true
             status = role == .sender ? "Connected. Approve screen sharing again to resume." : "Waiting for the phone to reconnect."
             #if os(macOS)
             presentation.showWindow()
             #endif
-        } catch { if operationGeneration == sessionGeneration { fail(error) } }
+        } catch {
+            guard operationGeneration == sessionGeneration else { return }
+            let failure = error as NSError
+            if failure.domain == "scrnshr.signaling", [401, 410].contains(failure.code) {
+                await requireFreshPairing()
+            } else {
+                approved = false
+                fail(error)
+            }
+        }
     }
 
     func approvePhone(_ accepted: Bool) {
@@ -397,18 +406,22 @@ final class SessionCoordinator: ObservableObject {
             guard let self, let generation = self.signalingGeneration else { return }
             Task { @MainActor [weak self] in
                 guard let self, generation == self.sessionGeneration else { return }
-                let resetGeneration = await self.reset()
-                guard resetGeneration == self.sessionGeneration else { return }
-                KeychainStore.delete(account: self.sessionCredentialAccount)
-                self.canRestore = false
-                self.status = "Pairing required"
-                self.error = "This session can no longer reconnect. Create a new session on the Mac and scan its new code on the iPhone."
+                await self.requireFreshPairing()
             }
         }
         signaling.onError = { [weak self] message in
             guard let self, self.signalingGeneration == self.sessionGeneration else { return }
             self.error = message
         }
+    }
+
+    private func requireFreshPairing() async {
+        let resetGeneration = await reset()
+        guard resetGeneration == sessionGeneration else { return }
+        KeychainStore.delete(account: sessionCredentialAccount)
+        canRestore = false
+        status = "Pairing required"
+        error = "This session can no longer reconnect. Create a new session on the Mac and scan its new code on the iPhone."
     }
 
     private func send(_ signal: RTCSignal) {
