@@ -186,18 +186,16 @@ class SignalingClient {
     }
 
     private func fetch<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let limit = 64 * 1024
-        let (bytes, response) = try await session.bytes(for: request)
-        // Dropping the iterator alone does not cancel an unfinished response.
-        defer { bytes.task.cancel() }
-        guard let response = response as? HTTPURLResponse else { throw PairingError.invalidServer }
-        guard response.expectedContentLength <= Int64(limit) else {
-            throw URLError(.dataLengthExceedsMaximum)
-        }
-        var data = Data()
-        for try await byte in bytes {
-            guard data.count < limit else { throw URLError(.dataLengthExceedsMaximum) }
-            data.append(byte)
+        let task = session.dataTask(with: request)
+        let collector = BoundedHTTPResponse()
+        task.delegate = collector
+        let (data, response) = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                collector.install(continuation)
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
         }
         guard (200..<300).contains(response.statusCode) else {
             let detail = (try? JSONDecoder().decode(ServerErrorBody.self, from: data).error) ?? "Server returned HTTP \(response.statusCode)."
@@ -205,5 +203,73 @@ class SignalingClient {
                           userInfo: [NSLocalizedDescriptionKey: detail])
         }
         return try JSONDecoder().decode(T.self, from: data)
+    }
+}
+
+// A task delegate checks chunks on URLSession's serial delegate queue, without
+// hopping to the main actor for every byte. Only the accepted body is retained.
+final class BoundedHTTPResponse: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    static let limit = 64 * 1024
+    // Cancellation can complete a task before the continuation is installed.
+    private let completionLock = NSLock()
+    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    private var result: Result<(Data, HTTPURLResponse), Error>?
+
+    func install(_ continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>) {
+        completionLock.lock()
+        let result = self.result
+        if result == nil { self.continuation = continuation }
+        completionLock.unlock()
+        if let result { continuation.resume(with: result) }
+    }
+
+    // Body and response state are accessed only on the serial delegate queue.
+    private(set) var data = Data()
+    private var response: HTTPURLResponse?
+    private var failure: Error?
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let response = response as? HTTPURLResponse else {
+            failure = PairingError.invalidServer
+            completionHandler(.cancel)
+            return
+        }
+        self.response = response
+        guard response.expectedContentLength <= Int64(Self.limit) else {
+            failure = URLError(.dataLengthExceedsMaximum)
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard failure == nil else { return }
+        guard data.count <= Self.limit - self.data.count else {
+            failure = URLError(.dataLengthExceedsMaximum)
+            dataTask.cancel()
+            return
+        }
+        self.data.append(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        // Preserve the size error when Foundation reports the cancellation it caused.
+        let result: Result<(Data, HTTPURLResponse), Error>
+        if let error = failure ?? error {
+            result = .failure(error)
+        } else if let response {
+            result = .success((data, response))
+        } else {
+            result = .failure(PairingError.invalidServer)
+        }
+        completionLock.lock()
+        self.result = result
+        let continuation = self.continuation
+        self.continuation = nil
+        completionLock.unlock()
+        continuation?.resume(with: result)
     }
 }
