@@ -1,14 +1,21 @@
 import importlib.util
+import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("summary", ROOT / "scripts/summarize-xcresult.py")
 summary_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(summary_module)
+spec = importlib.util.spec_from_file_location("bounded", ROOT / "scripts/run-bounded.py")
+bounded_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bounded_module)
 
 
 class XCTestSummaryTests(unittest.TestCase):
@@ -54,6 +61,16 @@ class XCTestSummaryTests(unittest.TestCase):
 
 
 class CommandDeadlineTests(unittest.TestCase):
+    def testGroupDisappearingDuringEscalationIsAccepted(self):
+        process = Mock(pid=123)
+        with patch.object(bounded_module.os, "killpg", side_effect=[None, None, ProcessLookupError]) as killpg:
+            with patch.object(bounded_module.time, "monotonic", side_effect=[0, 10]):
+                bounded_module.terminate(process, signal.SIGTERM)
+        self.assertEqual([call.args for call in killpg.call_args_list], [
+            (123, signal.SIGTERM), (123, 0), (123, signal.SIGKILL),
+        ])
+        process.wait.assert_called_once_with()
+
     def command(self, program, seconds=2):
         return subprocess.run(
             [sys.executable, str(ROOT / "scripts/run-bounded.py"), str(seconds), sys.executable, "-c", program],
@@ -67,6 +84,33 @@ class CommandDeadlineTests(unittest.TestCase):
         result = self.command("import time; time.sleep(5)", seconds=1)
         self.assertEqual(result.returncode, 124)
         self.assertIn("exceeded", result.stderr)
+
+    def testDeadlineKillsChildAfterLeaderExits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            group_file = Path(directory) / "group"
+            program = f"""
+import os, signal, time
+from pathlib import Path
+Path({str(group_file)!r}).write_text(str(os.getpid()))
+if os.fork() == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    print('child ready', flush=True)
+while True:
+    time.sleep(1)
+"""
+            try:
+                # communicate must reach EOF: the surviving child would keep
+                # the inherited output pipes open after the wrapper exits.
+                result = self.command(program)
+                self.assertEqual(result.returncode, 124)
+                self.assertIn("child ready", result.stdout)
+                self.assertIn("exceeded", result.stderr)
+            finally:
+                if group_file.exists():
+                    try:
+                        os.killpg(int(group_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 def terminate(process, requested_signal):
@@ -13,11 +14,23 @@ def terminate(process, requested_signal):
         os.killpg(process.pid, requested_signal)
     except ProcessLookupError:
         return
+    deadline = time.monotonic() + 10
+    while True:
+        # Reap the leader, but allow descendants their own grace period.
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.1, remaining))
     try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
+    except ProcessLookupError:
+        pass
+    process.wait()
 
 
 def main():
