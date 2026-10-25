@@ -113,6 +113,50 @@ final class PresentationTests: XCTestCase {
         }
     }
 
+    func testRepeatedTeardownDiscardsReuseRendererUntilAnotherFrameArrives() async throws {
+        try await MainActor.run {
+            try Self.requireMetal()
+            let controller = PresentationController()
+            controller.showWindow()
+            defer { controller.close() }
+            let view = try Self.presentationView()
+            let initialRenderer = try Self.renderer(in: view)
+
+            controller.setVideoTrack(nil)
+            controller.setCaptureStatus(.stopped)
+            controller.setConnectionState(.closed)
+            XCTAssertTrue(try Self.renderer(in: view) === initialRenderer)
+
+            // Repeat after recovery, including a frame retained behind blackout.
+            for blackedOut in [false, true] {
+                controller.setConnectionState(.connected)
+                controller.setCaptureStatus(.sharing)
+                if blackedOut { controller.blackout() }
+                controller.setExternalVideoFrame(try Self.frame())
+                let populatedRenderer = try Self.renderer(in: view)
+
+                controller.setCaptureStatus(.stopped)
+                let clearedRenderer = try Self.renderer(in: view)
+                XCTAssertFalse(clearedRenderer === populatedRenderer)
+                XCTAssertNil(populatedRenderer.superview)
+                XCTAssertTrue(controller.isMuted)
+                try Self.assertOpaqueBlackCover(view)
+
+                controller.setVideoTrack(nil)
+                controller.setConnectionState(.closed)
+                controller.setVideoTrack(nil)
+                XCTAssertTrue(try Self.renderer(in: view) === clearedRenderer)
+                try Self.assertOpaqueBlackCover(view)
+
+                controller.setConnectionState(.connected)
+                controller.setCaptureStatus(.sharing)
+                controller.resume()
+                XCTAssertTrue(controller.isMuted)
+                try Self.assertOpaqueBlackCover(view)
+            }
+        }
+    }
+
     func testClosingAndReopeningCannotClearBlackoutOrUserMute() async throws {
         try await MainActor.run {
             try Self.requireMetal()
