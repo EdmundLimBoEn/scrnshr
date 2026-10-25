@@ -173,6 +173,7 @@ final class PresentationController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     private func discardPicture() {
+        guard hasCurrentPicture else { return }
         hasCurrentPicture = false
         presentationView?.discardRetainedPicture()
     }
