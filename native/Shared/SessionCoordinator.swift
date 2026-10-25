@@ -50,7 +50,13 @@ final class SessionCoordinator: ObservableObject {
     @Published var canRestore = false
     @Published var relayOnly = false
     @Published var connectivity = ""
-    @Published var serverAddress: String
+    @Published var serverAddress: String {
+        didSet {
+            if (try? Self.ownerServer(oldValue)) != (try? Self.ownerServer(serverAddress)) {
+                loadOwnerCredential()
+            }
+        }
+    }
     @Published var ownerToken = ""
     @Published var isBusy = false
 
@@ -73,7 +79,46 @@ final class SessionCoordinator: ObservableObject {
 
     var hasSession: Bool { code != nil || approved || isSharing || !manualSignals.isEmpty }
 
-    private var ownerCredentialAccount: String { credentialNamespace + "owner-token" }
+    private var legacyOwnerCredentialAccount: String { credentialNamespace + "owner-token" }
+
+    private func ownerCredentialAccount(server: URL) -> String {
+        credentialNamespace + "owner-token:" + server.absoluteString
+    }
+
+    // Use the same canonical origin for both the credential key and the request.
+    private static func ownerServer(_ address: String) throws -> URL {
+        guard var components = URLComponents(string: address) else { throw PairingError.invalidServer }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        guard let host = components.host, !host.isEmpty,
+              components.port.map({ (1...65535).contains($0) }) ?? true,
+              let url = components.url else { throw PairingError.invalidServer }
+        _ = try PairingCode.validateServer(url)
+        components.path = ""
+        if components.port == 443 { components.port = nil }
+        guard let origin = components.url else { throw PairingError.invalidServer }
+        return origin
+    }
+
+    private func loadOwnerCredential() {
+        ownerToken = ""
+        guard let server = try? Self.ownerServer(serverAddress),
+              let data = try? KeychainStore.load(account: ownerCredentialAccount(server: server)),
+              let value = String(data: data, encoding: .utf8) else { return }
+        ownerToken = value
+    }
+
+    private func migrateOwnerCredential() throws {
+        guard let data = try KeychainStore.load(account: legacyOwnerCredentialAccount) else { return }
+        // Called only at initialization, before the saved server can be edited.
+        if let server = try? Self.ownerServer(serverAddress) {
+            let account = ownerCredentialAccount(server: server)
+            if try KeychainStore.load(account: account) == nil {
+                try KeychainStore.save(data, account: account)
+            }
+        }
+        KeychainStore.delete(account: legacyOwnerCredentialAccount)
+    }
     private var sessionCredentialAccount: String { credentialNamespace + "session-\(role.rawValue)" }
 
     init(role: PeerRole, signaling: SignalingClient? = nil, credentialNamespace: String = "") {
@@ -90,8 +135,8 @@ final class SessionCoordinator: ObservableObject {
         media = WebRTCSession(role: role)
         presentation = PresentationController()
         #endif
-        if let data = try? KeychainStore.load(account: ownerCredentialAccount),
-           let value = String(data: data, encoding: .utf8) { ownerToken = value }
+        do { try migrateOwnerCredential() } catch { fail(error) }
+        loadOwnerCredential()
         if let data = try? KeychainStore.load(account: sessionCredentialAccount),
            let saved = try? JSONDecoder().decode(SavedSession.self, from: data) {
             canRestore = saved.expiresAt > .now
@@ -123,9 +168,9 @@ final class SessionCoordinator: ObservableObject {
         isBusy = true
         defer { if operationGeneration == sessionGeneration { isBusy = false } }
         do {
-            guard let server = URL(string: serverAddress) else { throw PairingError.invalidServer }
-            _ = try PairingCode.validateServer(server)
-            guard !ownerToken.isEmpty else {
+            let server = try Self.ownerServer(serverAddress)
+            let ownerCredential = ownerToken
+            guard !ownerCredential.isEmpty else {
                 throw NSError(domain: "scrnshr", code: 1, userInfo: [NSLocalizedDescriptionKey: "Enter the server's owner credential first."])
             }
             operationGeneration = await reset(endServerSession: true, preserveBusy: true)
@@ -133,7 +178,7 @@ final class SessionCoordinator: ObservableObject {
             initializationStarted = true
             mode = .internet
             status = "Creating session"
-            let created = try await signaling.createSession(server: server, ownerToken: ownerToken)
+            let created = try await signaling.createSession(server: server, ownerToken: ownerCredential)
             guard operationGeneration == sessionGeneration else { return }
             let expiration = try created.expiration
             let pairing = try PairingCode(server: server, sessionId: created.sessionId,
@@ -144,8 +189,10 @@ final class SessionCoordinator: ObservableObject {
             scheduleExpiry(expiration)
             authenticator = try SignalAuthenticator(sessionId: pairing.sessionId, pairingKey: pairing.pairingKey, role: role)
             pairingURL = try pairing.url.absoluteString
+            try KeychainStore.save(Data(ownerCredential.utf8), account: ownerCredentialAccount(server: server))
+            // Never allow a failed legacy migration to follow a newly saved server.
+            KeychainStore.delete(account: legacyOwnerCredentialAccount)
             UserDefaults.standard.set(server.absoluteString, forKey: "signaling-server")
-            try KeychainStore.save(Data(ownerToken.utf8), account: ownerCredentialAccount)
             try saveSession()
             let ice = try await signaling.iceConfiguration(server: server, sessionId: pairing.sessionId, token: created.receiverToken)
             guard operationGeneration == sessionGeneration else { return }

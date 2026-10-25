@@ -8,6 +8,111 @@ import XCTest
 
 final class SessionOperationTests: XCTestCase {
     @MainActor
+    func testOwnerCredentialsFollowNormalizedOriginAndPort() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        let previous = UserDefaults.standard.object(forKey: "signaling-server")
+        defer {
+            KeychainStore.testMemory = nil
+            UserDefaults.standard.set(previous, forKey: "signaling-server")
+        }
+        UserDefaults.standard.set("https://PAIR.example.com:443/", forKey: "signaling-server")
+        try KeychainStore.save(Data("legacy-fixture".utf8), account: "origins.owner-token")
+        let signaling = DelayedEndSignalingClient()
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "origins.")
+        defer { coordinator.presentation.close() }
+        XCTAssertEqual(coordinator.ownerToken, "legacy-fixture")
+        XCTAssertNil(try KeychainStore.load(account: "origins.owner-token"))
+        coordinator.serverAddress = "HTTPS://pair.example.com"
+        XCTAssertEqual(coordinator.ownerToken, "legacy-fixture")
+        coordinator.serverAddress = "https://pair.example.com:8443"
+        XCTAssertEqual(coordinator.ownerToken, "")
+        coordinator.ownerToken = "port-fixture"
+        await coordinator.createInternetSession()
+        XCTAssertNil(coordinator.error)
+        coordinator.serverAddress = "https://other.example.com"
+        XCTAssertEqual(coordinator.ownerToken, "")
+        let count = signaling.creations.count
+        await coordinator.createInternetSession()
+        XCTAssertEqual(signaling.creations.count, count, "A different origin must not receive the saved credential")
+        coordinator.serverAddress = "https://PAIR.example.com/"
+        XCTAssertEqual(coordinator.ownerToken, "legacy-fixture")
+        coordinator.serverAddress = "https://pair.example.com:8443/"
+        XCTAssertEqual(coordinator.ownerToken, "port-fixture")
+        coordinator.serverAddress = "http://pair.example.com:8443"
+        XCTAssertEqual(coordinator.ownerToken, "")
+        await coordinator.stop()
+    }
+
+    @MainActor
+    func testLegacyOwnerCredentialRequiresPreviouslySavedValidServer() throws {
+        _ = NSApplication.shared
+        let previous = UserDefaults.standard.object(forKey: "signaling-server")
+        defer {
+            KeychainStore.testMemory = nil
+            UserDefaults.standard.set(previous, forKey: "signaling-server")
+        }
+        for savedServer in ["", "http://pair.example.com", "https://pair.example.com/path"] {
+            KeychainStore.testMemory = ["migration.owner-token": Data("legacy-fixture".utf8)]
+            UserDefaults.standard.set(savedServer, forKey: "signaling-server")
+            let coordinator = SessionCoordinator(role: .receiver, credentialNamespace: "migration.")
+            defer { coordinator.presentation.close() }
+            XCTAssertEqual(coordinator.ownerToken, "")
+            coordinator.serverAddress = "https://other.example.com"
+            XCTAssertEqual(coordinator.ownerToken, "")
+            XCTAssertNil(try KeychainStore.load(account: "migration.owner-token"))
+        }
+        KeychainStore.testMemory = [
+            "migration.owner-token": Data("legacy-fixture".utf8),
+            "migration.owner-token:https://pair.example.com": Data("new-fixture".utf8)
+        ]
+        UserDefaults.standard.set("https://pair.example.com/", forKey: "signaling-server")
+        let coordinator = SessionCoordinator(role: .receiver, credentialNamespace: "migration.")
+        defer { coordinator.presentation.close() }
+        XCTAssertEqual(coordinator.ownerToken, "new-fixture", "Migration must not overwrite an origin's credential")
+    }
+
+    @MainActor
+    func testCreationSnapshotsOwnerCredentialBeforeTeardownAndResponse() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        let previous = UserDefaults.standard.object(forKey: "signaling-server")
+        defer {
+            KeychainStore.testMemory = nil
+            UserDefaults.standard.set(previous, forKey: "signaling-server")
+        }
+        let signaling = DelayedEndSignalingClient()
+        let coordinator = SessionCoordinator(role: .receiver, signaling: signaling, credentialNamespace: "snapshot.")
+        defer { coordinator.presentation.close() }
+        coordinator.serverAddress = "https://pair.example.com"
+        coordinator.ownerToken = "initial-fixture"
+        await coordinator.createInternetSession()
+        coordinator.ownerToken = "snapshot-fixture"
+        let ending = expectation(description: "Teardown suspended")
+        let creating = expectation(description: "Creation suspended")
+        signaling.endStarted = { ending.fulfill() }
+        signaling.createStarted = { creating.fulfill() }
+        let creation = Task { await coordinator.createInternetSession() }
+        await fulfillment(of: [ending], timeout: 5)
+        coordinator.serverAddress = "https://other.example.com"
+        coordinator.ownerToken = "other-fixture"
+        signaling.finishEnd()
+        await fulfillment(of: [creating], timeout: 5)
+        XCTAssertEqual(signaling.creations.last?.0, URL(string: "https://pair.example.com"))
+        XCTAssertEqual(signaling.creations.last?.1, "snapshot-fixture")
+        coordinator.ownerToken = "edited-during-response-fixture"
+        signaling.finishCreation()
+        await creation.value
+        XCTAssertNil(coordinator.error)
+        XCTAssertEqual(coordinator.ownerToken, "edited-during-response-fixture")
+        coordinator.serverAddress = "https://pair.example.com/"
+        XCTAssertEqual(coordinator.ownerToken, "snapshot-fixture")
+        coordinator.serverAddress = "https://other.example.com"
+        XCTAssertEqual(coordinator.ownerToken, "")
+        await coordinator.stop()
+    }
+
+    @MainActor
     func testStopDiscardsUSBStartWaitingForSessionStop() async {
         let usb = USBScreenSource()
         let suspended = expectation(description: "Session stop suspended")
@@ -492,8 +597,25 @@ private final class DelayedEndSignalingClient: SignalingClient {
     var endStarted: (() -> Void)?
     private var pendingEnd: CheckedContinuation<Void, Never>?
 
+    var creations: [(URL, String)] = []
+    var createStarted: (() -> Void)?
+    private var pendingCreation: CheckedContinuation<Void, Never>?
+
+    func finishCreation() {
+        createStarted = nil
+        pendingCreation?.resume()
+        pendingCreation = nil
+    }
+
     override func createSession(server: URL, ownerToken: String) async throws -> CreatedSession {
-        CreatedSession(sessionId: UUID().uuidString,
+        creations.append((server, ownerToken))
+        if let createStarted {
+            await withCheckedContinuation { continuation in
+                pendingCreation = continuation
+                createStarted()
+            }
+        }
+        return CreatedSession(sessionId: UUID().uuidString,
                        receiverToken: Data(repeating: 1, count: 32).base64URL,
                        joinToken: Data(repeating: 2, count: 32).base64URL,
                        expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(lifetime)))
