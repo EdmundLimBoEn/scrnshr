@@ -66,6 +66,7 @@ final class SessionCoordinator: ObservableObject {
     private var pendingSignals: [RTCSignal] = []
     private var expiryTask: Task<Void, Never>?
     private var suppressCaptureCallbacks = false
+    private var approvalInitializationGeneration: UInt64?
     private var internetMediaConfigured = false
     private var awaitingReceiverRestart = false
     private var sessionGeneration: UInt64 = 0
@@ -315,6 +316,7 @@ final class SessionCoordinator: ObservableObject {
         token = nil
         expiresAt = nil
         authenticator = nil
+        approvalInitializationGeneration = nil
         internetMediaConfigured = false
         awaitingReceiverRestart = false
         approved = false
@@ -458,13 +460,20 @@ final class SessionCoordinator: ObservableObject {
                 if message.role == .receiver, isSharing, approved, media.connectionState != .connected { media.startOffer() }
             case "approval-required": approvalRequired = true; status = "Approve the phone to continue"
             case "approved":
+                guard approvalInitializationGeneration != expectedGeneration else { return }
+                approvalInitializationGeneration = expectedGeneration
+                defer {
+                    if approvalInitializationGeneration == expectedGeneration { approvalInitializationGeneration = nil }
+                }
                 if let resume = message.resumeToken {
                     guard Data(base64URL: resume)?.count == 32 else { throw PairingError.invalidCode }
                     token = resume
                     signaling.updateToken(resume)
                     if let code { expiresAt = code.expiresAt; scheduleExpiry(code.expiresAt) }
                 }
-                try await configureInternetMedia(expectedGeneration: expectedGeneration)
+                // Approval revokes the join token: retain the validated replacement even if ICE fails.
+                try saveSession()
+                try await configureInternetMedia(expectedGeneration: expectedGeneration, maximumAttempts: 3)
                 guard expectedGeneration == sessionGeneration else { return }
                 approved = true
                 try saveSession()
@@ -496,17 +505,37 @@ final class SessionCoordinator: ObservableObject {
         } catch { if expectedGeneration == sessionGeneration { fail(error) } }
     }
 
-    private func configureInternetMedia(expectedGeneration: UInt64) async throws {
+    private func configureInternetMedia(expectedGeneration: UInt64, maximumAttempts: Int = 1) async throws {
         guard expectedGeneration == sessionGeneration else { throw CancellationError() }
         guard !internetMediaConfigured else { return }
         guard let code, let token else { throw PairingError.invalidCode }
-        let ice = try await signaling.iceConfiguration(server: code.server, sessionId: code.sessionId, token: token)
+        let ice = try await fetchICE(code: code, token: token, expectedGeneration: expectedGeneration,
+                                     maximumAttempts: maximumAttempts)
         guard expectedGeneration == sessionGeneration, self.code?.sessionId == code.sessionId else {
             throw CancellationError()
         }
         connectivity = ice.connectivity
         configureMedia(iceServers: ice.iceServers, relayOnly: relayOnly)
         internetMediaConfigured = true
+    }
+
+    private func fetchICE(code: PairingCode, token: String, expectedGeneration: UInt64,
+                          maximumAttempts: Int) async throws -> ICEConfiguration {
+        var attempt = 0
+        while true {
+            guard expectedGeneration == sessionGeneration, !Task.isCancelled else { throw CancellationError() }
+            attempt += 1
+            do {
+                return try await signaling.iceConfiguration(server: code.server, sessionId: code.sessionId, token: token)
+            } catch {
+                guard expectedGeneration == sessionGeneration else { throw CancellationError() }
+                let failure = error as NSError
+                let transient = (failure.domain == NSURLErrorDomain && failure.code != NSURLErrorCancelled)
+                    || (failure.domain == "scrnshr.signaling" && (failure.code == 429 || (500...599).contains(failure.code)))
+                guard transient, attempt < maximumAttempts else { throw error }
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+            }
+        }
     }
 
     private func saveSession() throws {

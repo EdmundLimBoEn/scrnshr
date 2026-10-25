@@ -248,6 +248,101 @@ final class SessionOperationTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalPersistsResumeBeforeICEAndRetriesTransientFailure() async throws {
+        try await checkApprovalRecovery(failures: 1)
+    }
+
+    @MainActor
+    func testApprovalRetriesAreBoundedAndSavedSessionCanRecover() async throws {
+        try await checkApprovalRecovery(failures: 10)
+    }
+
+    @MainActor
+    func testStopDuringApprovalBackoffPreventsRetryAndLateApproval() async throws {
+        try await checkApprovalRecovery(failures: 10, stopDuringBackoff: true)
+    }
+
+    @MainActor
+    func testInvalidApprovalTokenIsNeverSavedOrUsedForICE() async throws {
+        try await checkApprovalRecovery(failures: 0, invalidToken: true)
+    }
+
+    @MainActor
+    private func checkApprovalRecovery(failures: Int, stopDuringBackoff: Bool = false,
+                                       invalidToken: Bool = false) async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        let namespace = "approval-recovery."
+        let account = namespace + "session-sender"
+        let signaling = DelayedEndSignalingClient()
+        signaling.transientICEFailures = failures
+        let coordinator = SessionCoordinator(role: .sender, signaling: signaling, credentialNamespace: namespace)
+        defer { coordinator.presentation.close() }
+        let code = try PairingCode(server: URL(string: "https://pair.example.com")!, sessionId: UUID().uuidString,
+                                   joinToken: Data(repeating: 2, count: 32).base64URL,
+                                   expiresAt: Date().addingTimeInterval(7200))
+        let resume = Data(repeating: 3, count: 32).base64URL
+        await coordinator.joinInternetSession(try code.url.absoluteString)
+        signaling.observeICE = { token in
+            XCTAssertEqual(token, resume)
+            XCTAssertFalse(coordinator.approved, "Sharing must wait for ICE initialization.")
+            XCTAssertTrue(coordinator.canRestore)
+            struct Saved: Decodable { let token: String }
+            do {
+                let data = try XCTUnwrap(KeychainStore.load(account: account))
+                XCTAssertEqual(try JSONDecoder().decode(Saved.self, from: data).token, resume)
+            } catch { XCTFail("Resume credentials must be persisted before the first ICE request.") }
+        }
+        let message = ServerMessage(type: "approved", role: nil, resumeToken: invalidToken ? "invalid" : resume,
+                                    payload: nil, mac: nil, reason: nil, message: nil)
+        signaling.onMessage?(message)
+        // A duplicate while initialization is suspended must not start a second retry loop.
+        if !invalidToken { signaling.onMessage?(message) }
+        for _ in 0..<100 {
+            if signaling.iceRequests > 0 || coordinator.error != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        if stopDuringBackoff {
+            await coordinator.stop()
+            try await Task.sleep(nanoseconds: 1_200_000_000)
+            XCTAssertEqual(signaling.iceRequests, 1)
+            XCTAssertFalse(coordinator.approved)
+            XCTAssertFalse(coordinator.canRestore)
+            XCTAssertNil(try KeychainStore.load(account: account))
+            XCTAssertNil(coordinator.error)
+            return
+        }
+        for _ in 0..<500 {
+            if coordinator.approved || coordinator.error != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        if invalidToken {
+            XCTAssertEqual(signaling.iceRequests, 0)
+            XCTAssertFalse(coordinator.canRestore)
+            XCTAssertFalse(coordinator.approved)
+            XCTAssertNotNil(coordinator.error)
+            XCTAssertNil(try KeychainStore.load(account: account))
+        } else if failures > 3 {
+            XCTAssertEqual(signaling.iceRequests, 3)
+            XCTAssertFalse(coordinator.approved)
+            XCTAssertNotNil(coordinator.error)
+            XCTAssertTrue(coordinator.canRestore)
+            try await Task.sleep(nanoseconds: 1_200_000_000)
+            XCTAssertEqual(signaling.iceRequests, 3, "Exhausted initialization must stop retrying.")
+            signaling.transientICEFailures = 0
+            await coordinator.restoreSession()
+            XCTAssertTrue(coordinator.approved)
+            XCTAssertNil(coordinator.error)
+        } else {
+            XCTAssertEqual(signaling.iceRequests, 2)
+            XCTAssertTrue(coordinator.approved)
+            XCTAssertNil(coordinator.error)
+        }
+        await coordinator.stop()
+    }
+
+    @MainActor
     private func saveRestoreFixture(account: String, lifetime: TimeInterval = 7200) throws {
         struct Saved: Encodable {
             let code: PairingCode
@@ -476,6 +571,9 @@ private final class SessionCreationURLProtocol: URLProtocol, @unchecked Sendable
 
 @MainActor
 private final class DelayedEndSignalingClient: SignalingClient {
+    var iceRequests = 0
+    var transientICEFailures = 0
+    var observeICE: ((String) -> Void)?
     var iceError: Error?
     var connections = 0
     var failICE = false
@@ -500,6 +598,12 @@ private final class DelayedEndSignalingClient: SignalingClient {
     }
 
     override func iceConfiguration(server: URL, sessionId: String, token: String) async throws -> ICEConfiguration {
+        iceRequests += 1
+        observeICE?(token)
+        if transientICEFailures > 0 {
+            transientICEFailures -= 1
+            throw NSError(domain: "scrnshr.signaling", code: 503)
+        }
         if let iceError { throw iceError }
         if failICE { throw URLError(.cannotConnectToHost) }
         if let iceStarted {
