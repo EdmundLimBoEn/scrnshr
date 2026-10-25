@@ -190,6 +190,49 @@ final class SessionOperationTests: XCTestCase {
     }
 
     @MainActor
+    func testLocallyExpiredRestoreClearsCredentialsWithoutResettingActiveSession() async throws {
+        _ = NSApplication.shared
+        KeychainStore.testMemory = [:]
+        defer { KeychainStore.testMemory = nil }
+        for role in [PeerRole.receiver, .sender] {
+            for active in [false, true] {
+                let namespace = "local-expiry-\(role.rawValue)-\(active)."
+                let account = namespace + "session-\(role.rawValue)"
+                try saveRestoreFixture(account: account, lifetime: 2)
+                let signaling = DelayedEndSignalingClient()
+                let coordinator = SessionCoordinator(role: role, signaling: signaling, credentialNamespace: namespace)
+                defer { coordinator.presentation.close() }
+                if active {
+                    await coordinator.startDirectSession()
+                    coordinator.media.onCaptureStatus?(.sharing)
+                }
+                XCTAssertTrue(coordinator.canRestore)
+                let status = coordinator.status
+                let sharing = coordinator.isSharing
+                let mediaState = coordinator.media.connectionState
+                let presentationMuted = coordinator.presentation.isMuted
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+
+                await coordinator.restoreSession()
+
+                XCTAssertNil(try KeychainStore.load(account: account))
+                XCTAssertFalse(coordinator.canRestore)
+                XCTAssertFalse(coordinator.isBusy)
+                XCTAssertEqual(coordinator.hasSession, active)
+                XCTAssertEqual(coordinator.approved, active)
+                XCTAssertEqual(coordinator.mode, .direct)
+                XCTAssertEqual(coordinator.isSharing, sharing)
+                XCTAssertEqual(coordinator.media.connectionState, mediaState)
+                XCTAssertEqual(coordinator.presentation.isMuted, presentationMuted)
+                XCTAssertEqual(coordinator.status, active ? status : "Pairing required")
+                XCTAssertTrue(coordinator.error?.contains("scan its new code") == true)
+                XCTAssertEqual(signaling.connections, 0)
+                await coordinator.stop()
+            }
+        }
+    }
+
+    @MainActor
     func testRestoreTransientFailurePreservesCredentialsForRetry() async throws {
         _ = NSApplication.shared
         KeychainStore.testMemory = [:]

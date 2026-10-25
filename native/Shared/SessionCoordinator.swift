@@ -201,7 +201,14 @@ final class SessionCoordinator: ObservableObject {
         do {
             guard let data = try KeychainStore.load(account: sessionCredentialAccount) else { throw PairingError.expired }
             let saved = try JSONDecoder().decode(SavedSession.self, from: data)
-            guard saved.expiresAt > .now else { throw PairingError.expired }
+            guard saved.expiresAt > .now else {
+                // Reject stale saved credentials without resetting an unrelated live session.
+                KeychainStore.delete(account: sessionCredentialAccount)
+                canRestore = false
+                if !hasSession { status = "Pairing required" }
+                error = "This session can no longer reconnect. Create a new session on the Mac and scan its new code on the iPhone."
+                return
+            }
             _ = try PairingCode.validateServer(saved.code.server)
             #if os(macOS)
             presentation.blackout()
