@@ -25,11 +25,54 @@ final class SignalingClientTests: XCTestCase {
     func testTransientUpgradeFailureStillRetries() async throws {
         let client = RejectedSocketClient(status: 503)
         let retry = expectation(description: "Transient failure retried")
-        client.onOpen = { if client.opened == 2 { retry.fulfill() } }
+        client.onOpen = {
+            if client.opened == 2 {
+                // Check at creation time, before close() can mask a leaked task.
+                XCTAssertTrue(client.lastSocket?.wasCancelled == true)
+                retry.fulfill()
+            }
+        }
         client.onPairingRequired = { XCTFail("Transient failure must preserve pairing") }
         try client.connect(server: URL(string: "https://pair.example.test")!, sessionId: "test", token: "resume")
         await fulfillment(of: [retry], timeout: 4)
         client.close()
+    }
+
+    @MainActor
+    func testMalformedMessagesAfterWaitingCancelSocketAndDoNotRetry() async throws {
+        let malformed: [URLSessionWebSocketTask.Message] = [
+            .string("{"),
+            .string("{\"type\":123}"),
+            .data(Data([0xff])),
+            .data(Data(repeating: 32, count: 65_537)),
+        ]
+        for frame in malformed {
+            let client = RejectedSocketClient(status: 101, messages: [
+                .string("{\"type\":\"waiting\"}"), frame,
+            ])
+            defer { client.close() }
+            let failed = expectation(description: "Malformed message terminates connection")
+            let retried = expectation(description: "No automatic protocol-error retry")
+            retried.isInverted = true
+            var received: [String] = []
+            var available = false
+            client.onMessage = { received.append($0.type) }
+            client.onAvailability = { available = $0 }
+            client.onPairingRequired = { XCTFail("Malformed messages are not authentication failures") }
+            client.onOpen = { if client.opened > 1 { retried.fulfill() } }
+            client.onError = { message in
+                XCTAssertEqual(message, "Signaling sent an invalid message. Reconnect to try again.")
+                XCTAssertTrue(client.lastSocket?.wasCancelled == true)
+                XCTAssertFalse(available)
+                failed.fulfill()
+            }
+            try client.connect(server: URL(string: "https://pair.example.test")!, sessionId: "test", token: "test")
+            await fulfillment(of: [failed], timeout: 1)
+            // The old path retries after two seconds, even after valid waiting.
+            await fulfillment(of: [retried], timeout: 2.2)
+            XCTAssertEqual(received, ["waiting"])
+            XCTAssertEqual(client.opened, 1)
+        }
     }
 
     func testOversizedStreamIsCancelledBeforeEOFForSuccessAndError() async throws {
@@ -222,33 +265,43 @@ private final class BoundedResponseURLProtocol: URLProtocol, @unchecked Sendable
 @MainActor
 private final class RejectedSocketClient: SignalingClient {
     let status: Int
+    let messages: [URLSessionWebSocketTask.Message]
     var opened = 0
     var onOpen: (() -> Void)?
     var lastSocket: RejectedWebSocket?
 
-    init(status: Int) { self.status = status; super.init() }
+    init(status: Int, messages: [URLSessionWebSocketTask.Message] = []) {
+        self.status = status
+        self.messages = messages
+        super.init()
+    }
 
     override func makeSocket(with request: URLRequest) -> any WebSocketTasking {
         opened += 1
-        let socket = RejectedWebSocket(status: status)
-        lastSocket = socket
+        let socket = RejectedWebSocket(status: status, messages: messages)
         onOpen?()
+        lastSocket = socket
         return socket
     }
 }
 
 private final class RejectedWebSocket: WebSocketTasking {
     let status: Int
+    var messages: [URLSessionWebSocketTask.Message]
     var maximumMessageSize = 0
     var wasResumed = false
     var wasCancelled = false
-    init(status: Int) { self.status = status }
+    init(status: Int, messages: [URLSessionWebSocketTask.Message]) {
+        self.status = status
+        self.messages = messages
+    }
     var response: URLResponse? {
         HTTPURLResponse(url: URL(string: "https://pair.example.test")!, statusCode: status,
                         httpVersion: "HTTP/1.1", headerFields: nil)
     }
     func resume() { wasResumed = true }
     func receive() async throws -> URLSessionWebSocketTask.Message {
+        if !messages.isEmpty { return messages.removeFirst() }
         throw URLError(.badServerResponse)
     }
     func send(_ message: URLSessionWebSocketTask.Message) async throws {

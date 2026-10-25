@@ -42,6 +42,7 @@ private struct ClientMessage: Encodable {
 }
 
 private struct ServerErrorBody: Decodable { let error: String? }
+private enum SocketError: Error { case malformedMessage }
 
 // Class identity lets the client ignore results from a replaced connection.
 protocol WebSocketTasking: AnyObject {
@@ -154,10 +155,11 @@ class SignalingClient {
                     switch response {
                     case .string(let text): data = Data(text.utf8)
                     case .data(let bytes): data = bytes
-                    @unknown default: throw PairingError.invalidCode
+                    @unknown default: throw SocketError.malformedMessage
                     }
-                    guard data.count <= 65536 else { throw PairingError.invalidCode }
-                    let message = try JSONDecoder().decode(ServerMessage.self, from: data)
+                    guard data.count <= 65536,
+                          let message = try? JSONDecoder().decode(ServerMessage.self, from: data)
+                    else { throw SocketError.malformedMessage }
                     self.reconnectAttempts = 0
                     self.onAvailability?(true)
                     self.onMessage?(message)
@@ -172,6 +174,13 @@ class SignalingClient {
                 }
             } catch {
                 guard let self, !self.intentionallyClosed, self.socket === activeSocket else { return }
+                // A valid frame before a malformed one must not reset an unlimited
+                // protocol-error retry loop. Require an explicit new connection.
+                if error is SocketError {
+                    self.close()
+                    self.onError?("Signaling sent an invalid message. Reconnect to try again.")
+                    return
+                }
                 // Failed upgrades retain their HTTP response on the task. These
                 // capabilities cannot recover by retrying the same pairing code.
                 if let status = (activeSocket.response as? HTTPURLResponse)?.statusCode,
@@ -182,6 +191,9 @@ class SignalingClient {
                     self.onPairingRequired?()
                     return
                 }
+                activeSocket.cancel(with: .goingAway, reason: nil)
+                self.socket = nil
+                self.sendTask?.cancel()
                 self.onAvailability?(false)
                 self.onError?("Signaling disconnected. The current picture can continue while reconnecting.")
                 self.reconnectAttempts += 1
