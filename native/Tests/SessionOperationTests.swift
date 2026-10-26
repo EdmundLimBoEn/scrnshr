@@ -274,10 +274,17 @@ final class SessionOperationTests: XCTestCase {
         KeychainStore.testMemory = [:]
         defer { KeychainStore.testMemory = nil }
         let namespace = "approval-recovery."
-        let account = namespace + "session-sender"
+        // The approval/ICE path is role-agnostic. macOS builds have no app-audio device, so a
+        // sender there fails media configuration by design; exercise the receiver instead.
+        #if os(iOS)
+        let role = PeerRole.sender
+        #else
+        let role = PeerRole.receiver
+        #endif
+        let account = namespace + "session-\(role.rawValue)"
         let signaling = DelayedEndSignalingClient()
         signaling.transientICEFailures = failures
-        let coordinator = SessionCoordinator(role: .sender, signaling: signaling, credentialNamespace: namespace)
+        let coordinator = SessionCoordinator(role: role, signaling: signaling, credentialNamespace: namespace)
         defer { coordinator.presentation.close() }
         let code = try PairingCode(server: URL(string: "https://pair.example.com")!, sessionId: UUID().uuidString,
                                    joinToken: Data(repeating: 2, count: 32).base64URL,
